@@ -1,0 +1,12 @@
+# Data prep
+pandas
+numpy
+pyarrow          # read amyloid_pyp_all_03102026.parquet
+scikit-learn
+tqdm
+
+# Training (matches the production CiDATGAN env)
+tensorflow
+Pillow
+
+# R (matching.R): MatchIt, tidyverse, readr
