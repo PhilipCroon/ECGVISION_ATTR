@@ -127,10 +127,17 @@ print(f"Train ECGs: {len(train_df)} ({train_df['MRN'].nunique()} MRNs)  "
 print(f"Val   ECGs: {len(validate_df)} ({validate_df['MRN'].nunique()} MRNs)  "
       f"pos={int(validate_df[LABEL].sum())}")
 
-# Val images -> RAM (DataSequenceRAM reads from disk cache)
+# Images -> RAM from PNG disk cache (fast; augmentation applied per-batch at train time)
 if MAKE_IMAGE:
     print("🔁 Precomputing images...")
+    save_all_images(train_df, IMAGE_DIR)
     save_all_images(validate_df, IMAGE_DIR)
+print("Loading images from disk into RAM...")
+train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
+train_df['image_array'] = train_df['fileID'].map(train_images)
+train_df = train_df[train_df['image_array'].notna()].reset_index(drop=True)
+assert len(train_df) > 0, (
+    f"No images loaded from {IMAGE_DIR}. Set MAKE_IMAGE=True on first run.")
 val_images = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
 validate_df = validate_df.copy()
 validate_df['image_array'] = validate_df['fileID'].map(val_images)
@@ -141,7 +148,7 @@ assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
 _model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
 print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
 
-train_sequence = DataSequenceTrain_RAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
+train_sequence = DataSequenceAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # %% === Train ===
@@ -196,7 +203,7 @@ registry_row = dict(
     epochs_frozen=EPOCHS_FROZEN,
     epochs_unfrozen=EPOCHS,
     val_fraction=VAL_FRACTION,
-    train_sequence='DataSequenceTrain_RAM',
+    train_sequence='DataSequenceAugRAM',
     lr_frozen=1e-3,
     lr_unfrozen='ExponentialDecay(2e-5,steps=1000,rate=0.96)',
     class_weights='[1.3,0.77]',
@@ -216,7 +223,7 @@ registry_cb = RegistryCallback(registry_row)
 fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(),
                            early_stop, registry_cb]
 
-print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=ExponentialDecay(2e-5)")
+print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=ExponentialDecay(2e-5), augmentation=rotation±10°")
 model_cnn.fit(train_sequence, epochs=EPOCHS, **fit_kwargs)
 
 print("✅ Training complete.")
