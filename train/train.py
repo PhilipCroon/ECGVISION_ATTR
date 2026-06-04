@@ -39,7 +39,8 @@ from model_helpers import *   # noqa: F401,F403  (ContrastiveModel)
 # === Config ===
 LABEL = 'amyloid'
 BATCH_SIZE = 256   # 128 per GPU across 2 GPUs; change back to 128 for single GPU
-EPOCHS = 5
+EPOCHS_FROZEN = 3       # head-only warmup
+EPOCHS = 5              # full fine-tune after unfreeze
 VAL_FRACTION = 0.15          # patient-level holdout from the matched train cohort
 MAKE_IMAGE = False           # set True to precompute ECG images first
 IMAGE_DIR = project.image_dir
@@ -98,8 +99,9 @@ train_sequence = DataSequenceRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # %% === Train ===
+frozen_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_frozen' + '_{epoch:02d}')
 saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_unfrozen' + '_{epoch:02d}')
-checkpoint = ModelCheckpoint(saved_model_file, monitor='val_loss', save_best_only=False, verbose=1)
+checkpoint = ModelCheckpoint(frozen_model_file, monitor='val_loss', save_best_only=False, verbose=1)
 csv_logger = CSVLogger(os.path.join(MODEL_DIR, f'{LABEL}_{save_date}_trains.csv'),
                        append=True, separator=';')
 
@@ -108,14 +110,8 @@ strategy = tf.distribute.MirroredStrategy()
 print(f"Training on {strategy.num_replicas_in_sync} GPU(s)")
 num_workers = max(1, int(multiprocessing.cpu_count() * 0.5))
 
-with strategy.scope():
-    model_cnn = build_transfer_model()
-    unfreeze_model(model_cnn)
-
-model_cnn.fit(
-    train_sequence,
+fit_kwargs = dict(
     validation_data=validation_sequence,
-    epochs=EPOCHS,
     verbose=0,
     callbacks=[TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback()],
     use_multiprocessing=True,
@@ -123,4 +119,23 @@ model_cnn.fit(
     max_queue_size=16,
     shuffle=True,
 )
+
+# Phase 1: frozen encoder, head-only warmup
+with strategy.scope():
+    model_cnn = build_transfer_model()
+
+print(f"Phase 1: frozen encoder, {EPOCHS_FROZEN} epochs @ LR={1e-3}")
+model_cnn.fit(train_sequence, epochs=EPOCHS_FROZEN, **fit_kwargs)
+
+# Phase 2: unfreeze all (except BN), fine-tune at lower LR
+with strategy.scope():
+    unfreeze_model(model_cnn)
+
+saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_unfrozen' + '_{epoch:02d}')
+checkpoint = ModelCheckpoint(saved_model_file, monitor='val_loss', save_best_only=False, verbose=1)
+fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback()]
+
+print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=1e-5")
+model_cnn.fit(train_sequence, epochs=EPOCHS, **fit_kwargs)
+
 print("✅ Training complete.")

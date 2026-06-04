@@ -28,7 +28,7 @@ CLASS_WEIGHTS = np.array([[1.3, 0.77]])   # [pos, neg]
 HEAD_UNITS = (64, 32)
 HEAD_DROPOUT = 0.2
 LR_FROZEN = 1e-3
-LR_UNFROZEN = 2e-5
+LR_UNFROZEN = 1e-5
 
 
 def loss_fn(y_true, y_pred):
