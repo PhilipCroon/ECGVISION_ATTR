@@ -827,7 +827,7 @@ def load_image_from_disk(fid, image_dir):
     path = os.path.join(image_dir, f"{filename}.png")
     try:
         img = Image.open(path).convert('RGB').resize((300, 300))
-        img = np.array(img).astype(np.float32)
+        img = np.array(img).astype(np.float32) / 255.0
         return img
     except Exception as e:
         print(f"Failed to load {fid}: {e}")
