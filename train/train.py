@@ -101,14 +101,9 @@ validate_df['image_array'] = validate_df['fileID'].map(val_images)
 validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
 assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
 
-# Effective number-of-samples class weights (data-driven, adapts to cohort imbalance)
-_BETA = 0.999995
-_n_pos = int(train_df[LABEL].sum())
-_n_neg = len(train_df) - _n_pos
-_w_pos = (1 - _BETA) / (1 - _BETA ** _n_pos)
-_w_neg = (1 - _BETA) / (1 - _BETA ** _n_neg)
-_model_module.CLASS_WEIGHTS = np.array([[_w_pos, _w_neg]])
-print(f"Class weights — pos: {_w_pos:.5f}  neg: {_w_neg:.5f}  ratio: {_w_pos / _w_neg:.1f}x")
+# Mild class weights — cohort is already 1:20 matched, so imbalance is handled at data level
+_model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
+print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
 
 train_sequence = DataSequenceRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
