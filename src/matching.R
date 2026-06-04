@@ -10,7 +10,7 @@
 #   - pyp_negative group is dropped here (only amyloid/control/lvh retained)
 .libPaths(c("~/R/library", .libPaths()))
 library(MatchIt)
-library(tidyverse)
+library(dplyr)
 library(readr)
 
 set.seed(20250910)
