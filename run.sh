@@ -18,4 +18,7 @@ python "$CODE_DIR/src/build_cohort.py" >> "$LOG_FILE" 2>&1
 echo -e "\n--- matching.R ---" >> "$LOG_FILE"
 Rscript "$CODE_DIR/src/matching.R" >> "$LOG_FILE" 2>&1
 
-echo -e "\n✅ Data prep complete. Train with: python train/train.py" >> "$LOG_FILE"
+echo -e "\n--- train/train.py ---" >> "$LOG_FILE"
+python "$CODE_DIR/train/train.py" >> "$LOG_FILE" 2>&1
+
+echo -e "\n✅ Done." >> "$LOG_FILE"

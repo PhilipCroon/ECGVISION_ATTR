@@ -7,6 +7,7 @@ unfreeze schedule, class weights, optimizer/LR). Defaults below reproduce the
 current production model exactly.
 """
 import os
+import sys
 
 import numpy as np
 import tensorflow as tf
@@ -14,13 +15,15 @@ from tensorflow.keras import Model
 from tensorflow.keras.layers import BatchNormalization, Dropout, Dense
 import tensorflow.keras.backend as K
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import project_constants as project
+
 # ContrastiveModel etc. live in the shared image-models repo.
-import sys
-sys.path.append("/home/pmc57/ecg-image-models")
+sys.path.append(project.ecg_image_models_path)
 from model_helpers import *  # noqa: F401,F403  (ContrastiveModel)
 
 # === Alteration knobs (defaults = current production model) ===
-CONTRASTIVE_WEIGHTS = '/mnt/home/pmc57/PheWas_AI_ECG/nfs_yale_ecg/contrastive_pre2015/B3/B3_biocontrastive_epoch10'
+CONTRASTIVE_WEIGHTS = project.contrastive_weights
 CLASS_WEIGHTS = np.array([[1.3, 0.77]])   # [pos, neg]
 HEAD_UNITS = (64, 32)
 HEAD_DROPOUT = 0.2

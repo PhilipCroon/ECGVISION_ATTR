@@ -46,6 +46,14 @@ MATCH_RATIO = 20            # 1:20 difficulty enrichment (amyloid vs control AND
 MAX_ECG_PER_PATIENT = 5     # ECGs kept per matched patient
 
 
+# === Training-specific paths (change these when moving servers) ===
+# utils.py and model_helpers.py live in this repo — ecg_image_models_path = project_root
+ecg_image_models_path = project_root
+signals_base = '/mnt/raid0/bb2238/signals'   # raw ECG .npy root (numpy_rp/ and numpy/ subdirs)
+contrastive_weights = '/mnt/nfs_yale_ecg/contrastive_pre2015/B3/B3_biocontrastive_epoch10'
+image_dir = '/home/pmc57/precomputed_images_attr'   # writable dir — created on first MAKE_IMAGE run
+formats_file = '/mnt/nfs_yale_ecg/preprocessing/formats_rerun.csv'
+
 # === Chunked CSV loaders (used by clean_echo.py ICD scan) ===
 def load_data_in_chunks(file_path, columns=None, chunk_size=10000, sep=',', n_rows=None):
     import pandas as pd

@@ -1,4 +1,4 @@
-#!/home/pmc57/miniconda/envs/CiDATGAN/bin/python
+#!/home/pmc57/miniconda3/envs/CiDATGAN/bin/python
 """
 Train ECGVISION-ATTR (amyloid) on the difficulty-enriched matched cohort.
 
@@ -28,13 +28,13 @@ from tqdm.keras import TqdmCallback
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 pd.set_option('display.max_columns', 300)
 
-sys.path.append("/home/pmc57/ecg-image-models")
-from utils import *           # noqa: F401,F403  (make_plot, save_all_images, ...)
-from model_helpers import *   # noqa: F401,F403  (DataSequenceRAM, load_images_parallel)
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import project_constants as project
 from model import build_transfer_model, unfreeze_model, gc_callback
+
+sys.path.append(project.ecg_image_models_path)
+from utils import *           # noqa: F401,F403  (DataSequenceRAM, load_images_parallel, make_plot, ...)
+from model_helpers import *   # noqa: F401,F403  (ContrastiveModel)
 
 # === Config ===
 LABEL = 'amyloid'
@@ -42,9 +42,9 @@ BATCH_SIZE = 128
 EPOCHS = 5
 VAL_FRACTION = 0.15          # patient-level holdout from the matched train cohort
 MAKE_IMAGE = False           # set True to precompute ECG images first
-IMAGE_DIR = "/home/pmc57/PheWas_AI_ECG/precomputed_images"
+IMAGE_DIR = project.image_dir
 MODEL_DIR = os.path.join(project.project_root, 'models')
-FORMATS_FILE = '/home/pmc57/PheWas_AI_ECG/nfs_yale_ecg/preprocessing/formats_rerun.csv'
+FORMATS_FILE = project.formats_file
 os.makedirs(MODEL_DIR, exist_ok=True)
 save_date = datetime.today().strftime('%Y_%m_%d')
 
@@ -81,8 +81,13 @@ if MAKE_IMAGE:
     save_all_images(train_df, IMAGE_DIR)
     save_all_images(validate_df, IMAGE_DIR)
 print("Loading images from disk into RAM...")
-train_df['image_array'] = load_images_parallel(train_df['fileID'], IMAGE_DIR)
-validate_df['image_array'] = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
+train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
+train_df['image_array'] = train_df['fileID'].map(train_images)
+train_df = train_df[train_df['image_array'].notna()].reset_index(drop=True)
+
+val_images = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
+validate_df['image_array'] = validate_df['fileID'].map(val_images)
+validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
 
 train_sequence = DataSequenceRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
