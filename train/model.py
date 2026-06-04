@@ -28,7 +28,9 @@ CLASS_WEIGHTS = np.array([[1.3, 0.77]])   # [pos, neg]
 HEAD_UNITS = (64, 32)
 HEAD_DROPOUT = 0.2
 LR_FROZEN = 1e-3
-LR_UNFROZEN = 1e-5
+LR_UNFROZEN = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate=2e-5, decay_steps=1000, decay_rate=0.96, staircase=True
+)
 
 
 def loss_fn(y_true, y_pred):

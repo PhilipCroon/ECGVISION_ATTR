@@ -41,7 +41,7 @@ from model_helpers import *   # noqa: F401,F403  (ContrastiveModel)
 LABEL = 'amyloid'
 BATCH_SIZE = 256   # 128 per GPU across 2 GPUs; change back to 128 for single GPU
 EPOCHS_FROZEN = 3       # head-only warmup
-EPOCHS = 5              # full fine-tune after unfreeze
+EPOCHS = 20             # full fine-tune after unfreeze
 VAL_FRACTION = 0.15          # patient-level holdout from the matched train cohort
 MAKE_IMAGE = True            # set True to precompute ECG images first
 IMAGE_DIR = project.image_dir
@@ -82,19 +82,10 @@ print(f"Train ECGs: {len(train_df)} ({train_df['MRN'].nunique()} MRNs)  "
 print(f"Val   ECGs: {len(validate_df)} ({validate_df['MRN'].nunique()} MRNs)  "
       f"pos={int(validate_df[LABEL].sum())}")
 
-# Images -> RAM
+# Val images -> RAM (DataSequenceRAM reads from disk cache)
 if MAKE_IMAGE:
     print("🔁 Precomputing images...")
-    save_all_images(train_df, IMAGE_DIR)
     save_all_images(validate_df, IMAGE_DIR)
-print("Loading images from disk into RAM...")
-train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
-train_df['image_array'] = train_df['fileID'].map(train_images)
-train_df = train_df[train_df['image_array'].notna()].reset_index(drop=True)
-assert len(train_df) > 0, (
-    f"No images loaded from {IMAGE_DIR}. "
-    "Set MAKE_IMAGE=True on first run to precompute images.")
-
 val_images = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
 validate_df = validate_df.copy()
 validate_df['image_array'] = validate_df['fileID'].map(val_images)
@@ -105,7 +96,7 @@ assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
 _model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
 print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
 
-train_sequence = DataSequenceRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
+train_sequence = DataSequenceTrain_RAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # %% === Train ===
@@ -148,10 +139,10 @@ with strategy.scope():
 saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_unfrozen' + '_{epoch:02d}')
 checkpoint = ModelCheckpoint(saved_model_file, monitor='val_auroc', mode='max',
                              save_best_only=True, verbose=1)
-early_stop = EarlyStopping(monitor='val_auroc', patience=3, mode='max', verbose=1)
+early_stop = EarlyStopping(monitor='val_auroc', patience=5, mode='max', verbose=1)
 fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(), early_stop]
 
-print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=1e-5")
+print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=ExponentialDecay(2e-5)")
 model_cnn.fit(train_sequence, epochs=EPOCHS, **fit_kwargs)
 
 print("✅ Training complete.")
