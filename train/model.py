@@ -34,6 +34,7 @@ LR_UNFROZEN = 1e-5
 def loss_fn(y_true, y_pred):
     """Class-weighted binary cross-entropy."""
     y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
     w = CLASS_WEIGHTS
     return K.mean(
         (w[:, 1] ** (1 - y_true)) * (w[:, 0] ** (y_true))
@@ -58,7 +59,7 @@ def build_transfer_model():
     for units in HEAD_UNITS:
         x = Dense(units, activation='relu')(x)
         x = Dropout(HEAD_DROPOUT)(x)
-    x = Dense(1, activation='sigmoid')(x)
+    x = Dense(1, activation='sigmoid', dtype='float32')(x)
 
     model = Model(pretraining_model.encoder.input, x)
     opt = tf.keras.optimizers.Adam(learning_rate=LR_FROZEN, clipnorm=1.0)

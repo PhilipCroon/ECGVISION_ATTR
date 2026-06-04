@@ -190,6 +190,19 @@ def main():
     results.append(report_metrics(p['label'].values, p['pred_mean'].values,
                                   label='In PyP (CARI referred)'))
 
+    # Not in PyP
+    np_ = pat[~pat['in_pyp']]
+    results.append(report_metrics(np_['label'].values, np_['pred_mean'].values,
+                                  label='Not in PyP'))
+
+    # Age > 65
+    if 'Age' in cohort.columns:
+        pat_age = pat.merge(
+            cohort.groupby('MRN')['Age'].first().reset_index(), on='MRN', how='left')
+        over65 = pat_age[pat_age['Age'] > 65]
+        results.append(report_metrics(over65['label'].values, over65['pred_mean'].values,
+                                      label='Age > 65'))
+
     # Save predictions
     save_date = datetime.today().strftime('%Y_%m_%d')
     out_path = os.path.join(project.tabs_path, f'eval_{save_date}.csv')
