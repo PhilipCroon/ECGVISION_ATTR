@@ -11,6 +11,7 @@ Key:    cohort carries FileID; training keys on fileID (FileID minus '.dcm').
 Filter: format == 'full' (same as production script).
 """
 # %%
+import csv
 import os
 import sys
 import multiprocessing
@@ -49,6 +50,50 @@ MODEL_DIR = os.path.join(project.project_root, 'models')
 FORMATS_FILE = project.formats_file
 os.makedirs(MODEL_DIR, exist_ok=True)
 save_date = datetime.today().strftime('%Y_%m_%d')
+run_id = datetime.today().strftime('%Y%m%d_%H%M%S')
+
+# === Run registry ===
+REGISTRY_FILE = os.path.join(MODEL_DIR, 'run_registry.csv')
+REGISTRY_FIELDS = [
+    'run_id', 'date', 'label', 'batch_size', 'epochs_frozen', 'epochs_unfrozen',
+    'val_fraction', 'train_sequence', 'lr_frozen', 'lr_unfrozen',
+    'class_weights', 'augmentation', 'mixed_precision',
+    'n_train', 'n_val', 'n_train_pos', 'n_val_pos',
+    'best_val_auroc_frozen', 'best_val_auroc_unfrozen', 'best_epoch_unfrozen',
+    'epoch_csv',
+]
+
+def _write_registry(row: dict):
+    write_header = not os.path.exists(REGISTRY_FILE)
+    with open(REGISTRY_FILE, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=REGISTRY_FIELDS, extrasaction='ignore')
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+class RegistryCallback(tf.keras.callbacks.Callback):
+    """Writes best val_auroc to run_registry.csv at end of phase 2."""
+    def __init__(self, registry_row: dict):
+        super().__init__()
+        self.registry_row = registry_row
+        self.best_val_auroc = -np.inf
+        self.best_epoch = -1
+
+    def on_epoch_end(self, epoch, logs=None):
+        val_auroc = (logs or {}).get('val_auroc', -np.inf)
+        if val_auroc > self.best_val_auroc:
+            self.best_val_auroc = val_auroc
+            self.best_epoch = epoch + 1
+
+    def on_train_end(self, logs=None):
+        self.registry_row['best_val_auroc_unfrozen'] = round(self.best_val_auroc, 5)
+        self.registry_row['best_epoch_unfrozen'] = self.best_epoch
+        _write_registry(self.registry_row)
+        print(f"\nRun registry updated: {REGISTRY_FILE}")
+        print(f"  run_id={self.registry_row['run_id']}  "
+              f"best_val_auroc={self.best_val_auroc:.4f}  epoch={self.best_epoch}")
+
 
 # GPU setup
 gpus = tf.config.list_physical_devices('GPU')
@@ -100,11 +145,12 @@ train_sequence = DataSequenceTrain_RAM(df=train_df, batch_size=BATCH_SIZE, label
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # %% === Train ===
+epoch_csv = os.path.join(MODEL_DIR, f'{LABEL}_{run_id}_epochs.csv')
+
 frozen_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_frozen' + '_{epoch:02d}')
 checkpoint = ModelCheckpoint(frozen_model_file, monitor='val_auroc', mode='max',
                              save_best_only=True, verbose=1)
-csv_logger = CSVLogger(os.path.join(MODEL_DIR, f'{LABEL}_{save_date}_trains.csv'),
-                       append=True, separator=';')
+csv_logger = CSVLogger(epoch_csv, append=True, separator=';')
 early_stop_frozen = EarlyStopping(monitor='val_auroc', patience=2, mode='max', verbose=1)
 
 # MirroredStrategy for multi-GPU; fall back to default for single GPU
@@ -130,7 +176,8 @@ with strategy.scope():
     model_cnn = build_transfer_model()
 
 print(f"Phase 1: frozen encoder, {EPOCHS_FROZEN} epochs @ LR={1e-3}")
-model_cnn.fit(train_sequence, epochs=EPOCHS_FROZEN, **fit_kwargs)
+history_frozen = model_cnn.fit(train_sequence, epochs=EPOCHS_FROZEN, **fit_kwargs)
+best_val_auroc_frozen = max(history_frozen.history.get('val_auroc', [-1]))
 
 # Phase 2: unfreeze all (except BN), fine-tune at lower LR
 with strategy.scope():
@@ -140,7 +187,34 @@ saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_unfrozen' 
 checkpoint = ModelCheckpoint(saved_model_file, monitor='val_auroc', mode='max',
                              save_best_only=True, verbose=1)
 early_stop = EarlyStopping(monitor='val_auroc', patience=5, mode='max', verbose=1)
-fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(), early_stop]
+
+registry_row = dict(
+    run_id=run_id,
+    date=save_date,
+    label=LABEL,
+    batch_size=BATCH_SIZE,
+    epochs_frozen=EPOCHS_FROZEN,
+    epochs_unfrozen=EPOCHS,
+    val_fraction=VAL_FRACTION,
+    train_sequence='DataSequenceTrain_RAM',
+    lr_frozen=1e-3,
+    lr_unfrozen='ExponentialDecay(2e-5,steps=1000,rate=0.96)',
+    class_weights='[1.3,0.77]',
+    augmentation='rotation+-10deg',
+    mixed_precision='mixed_bfloat16',
+    n_train=len(train_df),
+    n_val=len(validate_df),
+    n_train_pos=int(train_df[LABEL].sum()),
+    n_val_pos=int(validate_df[LABEL].sum()),
+    best_val_auroc_frozen=round(best_val_auroc_frozen, 5),
+    best_val_auroc_unfrozen=None,
+    best_epoch_unfrozen=None,
+    epoch_csv=os.path.basename(epoch_csv),
+)
+registry_cb = RegistryCallback(registry_row)
+
+fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(),
+                           early_stop, registry_cb]
 
 print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=ExponentialDecay(2e-5)")
 model_cnn.fit(train_sequence, epochs=EPOCHS, **fit_kwargs)
