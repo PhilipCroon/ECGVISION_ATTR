@@ -96,6 +96,7 @@ assert len(train_df) > 0, (
     "Set MAKE_IMAGE=True on first run to precompute images.")
 
 val_images = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
+validate_df = validate_df.copy()
 validate_df['image_array'] = validate_df['fileID'].map(val_images)
 validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
 assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
