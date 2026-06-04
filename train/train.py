@@ -90,10 +90,14 @@ print("Loading images from disk into RAM...")
 train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
 train_df['image_array'] = train_df['fileID'].map(train_images)
 train_df = train_df[train_df['image_array'].notna()].reset_index(drop=True)
+assert len(train_df) > 0, (
+    f"No images loaded from {IMAGE_DIR}. "
+    "Set MAKE_IMAGE=True on first run to precompute images.")
 
 val_images = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
 validate_df['image_array'] = validate_df['fileID'].map(val_images)
 validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
+assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
 
 train_sequence = DataSequenceRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
