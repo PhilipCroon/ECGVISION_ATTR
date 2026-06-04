@@ -108,7 +108,7 @@ if not tables:
 
 with pd.ExcelWriter(OUT_XLSX, engine='openpyxl') as writer:
     for sheet_name, tbl in tables.items():
-        safe_name = sheet_name[:31]  # Excel sheet name limit
+        safe_name = sheet_name.replace(':', '').replace('/', '-')[:31]
         tbl.to_excel(writer, sheet_name=safe_name)
 
 print(f"\nSaved: {OUT_XLSX}")
