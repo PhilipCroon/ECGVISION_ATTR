@@ -8,6 +8,7 @@
 #   - ratio (project MATCH_RATIO = 20)
 #   - slice_head(n = 5): ECGs per patient cap
 #   - pyp_negative group is dropped here (only amyloid/control/lvh retained)
+.libPaths(c("~/R/library", .libPaths()))
 library(MatchIt)
 library(tidyverse)
 library(readr)
