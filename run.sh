@@ -25,6 +25,6 @@ echo -e "\n--- baseline_table.py ---" >> "$LOG_FILE"
 python "$CODE_DIR/src/baseline_table.py" >> "$LOG_FILE" 2>&1
 
 echo -e "\n--- train/train.py ---" >> "$LOG_FILE"
-python "$CODE_DIR/train/train.py" >> "$LOG_FILE" 2>&1
+CUDA_VISIBLE_DEVICES=3,4 python "$CODE_DIR/train/train.py" >> "$LOG_FILE" 2>&1
 
 echo -e "\n✅ Done." >> "$LOG_FILE"
