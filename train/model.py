@@ -49,10 +49,15 @@ def _metrics():
 
 def build_transfer_model():
     """EfficientNetB3 encoder (contrastive init, frozen) + dense head."""
+    # Checkpoint was saved in float32; build encoder under float32 to avoid
+    # dtype mismatch when mixed_bfloat16 is the global policy.
+    _policy = tf.keras.mixed_precision.global_policy()
+    tf.keras.mixed_precision.set_global_policy('float32')
     pretraining_model = ContrastiveModel()
     pretraining_model.built = True
     pretraining_model.load_weights(CONTRASTIVE_WEIGHTS)
     pretraining_model.trainable = False
+    tf.keras.mixed_precision.set_global_policy(_policy)
 
     x = BatchNormalization()(pretraining_model.encoder.output)
     x = Dropout(HEAD_DROPOUT)(x)
