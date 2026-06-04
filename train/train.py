@@ -38,7 +38,7 @@ from model_helpers import *   # noqa: F401,F403  (ContrastiveModel)
 
 # === Config ===
 LABEL = 'amyloid'
-BATCH_SIZE = 128
+BATCH_SIZE = 256   # 128 per GPU across 2 GPUs; change back to 128 for single GPU
 EPOCHS = 5
 VAL_FRACTION = 0.15          # patient-level holdout from the matched train cohort
 MAKE_IMAGE = False           # set True to precompute ECG images first
@@ -48,9 +48,14 @@ FORMATS_FILE = project.formats_file
 os.makedirs(MODEL_DIR, exist_ok=True)
 save_date = datetime.today().strftime('%Y_%m_%d')
 
-# Only grow GPU memory as needed
-for gpu in tf.config.experimental.list_physical_devices('GPU'):
+# GPU setup
+gpus = tf.config.list_physical_devices('GPU')
+for gpu in gpus:
     tf.config.experimental.set_memory_growth(gpu, True)
+print(f"GPUs available: {len(gpus)}")
+
+# Mixed precision: bfloat16 on H100 — faster, numerically same as float32
+tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
 
 # %% === Data ===
 cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_20.csv'))
@@ -98,7 +103,9 @@ checkpoint = ModelCheckpoint(saved_model_file, monitor='val_loss', save_best_onl
 csv_logger = CSVLogger(os.path.join(MODEL_DIR, f'{LABEL}_{save_date}_trains.csv'),
                        append=True, separator=';')
 
-strategy = tf.distribute.MultiWorkerMirroredStrategy()
+# MirroredStrategy: single-node multi-GPU (uses all visible GPUs automatically)
+strategy = tf.distribute.MirroredStrategy()
+print(f"Training on {strategy.num_replicas_in_sync} GPU(s)")
 num_workers = max(1, int(multiprocessing.cpu_count() * 0.5))
 
 with strategy.scope():
@@ -113,7 +120,7 @@ model_cnn.fit(
     callbacks=[TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback()],
     use_multiprocessing=True,
     workers=num_workers,
-    max_queue_size=8,
+    max_queue_size=16,
     shuffle=True,
 )
 print("✅ Training complete.")
