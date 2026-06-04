@@ -12,6 +12,9 @@ date >> "$LOG_FILE"
 # echo -e "\n--- clean_echo.py ---" >> "$LOG_FILE"
 # python "$CODE_DIR/src/clean_echo.py" >> "$LOG_FILE" 2>&1
 
+echo -e "\n--- build_medication.py ---" >> "$LOG_FILE"
+python "$CODE_DIR/src/build_medication.py" >> "$LOG_FILE" 2>&1
+
 echo -e "\n--- build_cohort.py ---" >> "$LOG_FILE"
 python "$CODE_DIR/src/build_cohort.py" >> "$LOG_FILE" 2>&1
 
