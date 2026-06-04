@@ -121,8 +121,12 @@ csv_logger = CSVLogger(os.path.join(MODEL_DIR, f'{LABEL}_{save_date}_trains.csv'
                        append=True, separator=';')
 early_stop_frozen = EarlyStopping(monitor='val_auroc', patience=2, mode='max', verbose=1)
 
-# MirroredStrategy: single-node multi-GPU (uses all visible GPUs automatically)
-strategy = tf.distribute.MirroredStrategy()
+# MirroredStrategy for multi-GPU; fall back to default for single GPU
+# (MirroredStrategy triggers NCCL init even on 1 GPU, which can crash on some H100 configs)
+if len(gpus) > 1:
+    strategy = tf.distribute.MirroredStrategy()
+else:
+    strategy = tf.distribute.get_strategy()  # default single-device strategy
 print(f"Training on {strategy.num_replicas_in_sync} GPU(s)")
 num_workers = max(1, int(multiprocessing.cpu_count() * 0.5))
 
