@@ -42,8 +42,8 @@ def loss_fn(y_true, y_pred):
 
 def _metrics():
     return [tf.keras.metrics.BinaryAccuracy(),
-            tf.keras.metrics.AUC(curve='ROC'),
-            tf.keras.metrics.AUC(curve='PR')]
+            tf.keras.metrics.AUC(curve='ROC', name='auroc'),
+            tf.keras.metrics.AUC(curve='PR', name='auprc')]
 
 
 def build_transfer_model():
