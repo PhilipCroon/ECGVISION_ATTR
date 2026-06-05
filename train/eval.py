@@ -20,6 +20,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from tqdm import tqdm
 from sklearn.metrics import roc_auc_score, average_precision_score, roc_curve
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -134,7 +135,13 @@ def main():
 
     X = np.stack(cohort['image_array'].values)
     print("Predicting...")
-    y_pred = model.predict(X, batch_size=256, verbose=1).squeeze()
+    batch_size = 256
+    n_batches = int(np.ceil(len(X) / batch_size))
+    preds = []
+    for i in tqdm(range(n_batches), desc="Predicting", unit="batch"):
+        batch = X[i * batch_size:(i + 1) * batch_size]
+        preds.append(model.predict_on_batch(batch))
+    y_pred = np.concatenate(preds).squeeze()
     cohort['pred'] = y_pred
 
     # --- Patient-level aggregation ---
