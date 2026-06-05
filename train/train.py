@@ -174,7 +174,7 @@ fit_kwargs = dict(
     verbose=0,
     callbacks=[TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(), early_stop_frozen],
     use_multiprocessing=False,
-    workers=4,
+    workers=num_workers,
     shuffle=True,
 )
 
