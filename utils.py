@@ -752,8 +752,9 @@ class DataSequenceAugRAM(tf.keras.utils.Sequence):
         self.labels = df[[label]].values.astype(np.float32)
         self.batch_size = batch_size
         # factor = fraction of full rotation; ±max_angle degrees = max_angle/360
+        # dtype='float32': ImageProjectiveTransformV3 rejects bfloat16 (mixed-precision global policy)
         self.aug = tf.keras.layers.RandomRotation(
-            factor=max_angle / 360.0, fill_mode='nearest', seed=None
+            factor=max_angle / 360.0, fill_mode='nearest', seed=None, dtype='float32'
         )
 
     def __len__(self):
@@ -762,7 +763,7 @@ class DataSequenceAugRAM(tf.keras.utils.Sequence):
     def __getitem__(self, idx):
         batch_x = np.stack(self.images[idx * self.batch_size:(idx + 1) * self.batch_size])
         batch_y = self.labels[idx * self.batch_size:(idx + 1) * self.batch_size]
-        augmented = self.aug(batch_x, training=True).numpy()
+        augmented = self.aug(batch_x.astype(np.float32), training=True).numpy()
         return augmented.astype(np.float32), batch_y
 
 
