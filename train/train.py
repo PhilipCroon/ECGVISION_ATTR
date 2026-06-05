@@ -173,8 +173,8 @@ fit_kwargs = dict(
     validation_data=validation_sequence,
     verbose=0,
     callbacks=[TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(), early_stop_frozen],
-    use_multiprocessing=False,  # DataSequenceRAM is in-memory; forking would pickle all arrays
-    workers=1,
+    use_multiprocessing=False,
+    workers=4,
     shuffle=True,
 )
 

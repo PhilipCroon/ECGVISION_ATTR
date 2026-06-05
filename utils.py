@@ -742,7 +742,7 @@ class DataSequenceRAM(tf.keras.utils.Sequence):
 class DataSequenceAugRAM(tf.keras.utils.Sequence):
     """
     Like DataSequenceRAM but applies random rotation ±max_angle degrees per batch.
-    Uses pre-loaded images from disk cache (fast) instead of re-rendering from raw signals.
+    Uses TF RandomRotation (faster than scipy ndimage, no Python GIL bottleneck).
     Expects a column 'image_array' with shape (300, 300, 3) in the input dataframe.
     Images should already be normalised to [0, 1].
     """
@@ -751,19 +751,18 @@ class DataSequenceAugRAM(tf.keras.utils.Sequence):
         self.images = df['image_array'].values
         self.labels = df[[label]].values.astype(np.float32)
         self.batch_size = batch_size
-        self.max_angle = max_angle
+        # factor = fraction of full rotation; ±max_angle degrees = max_angle/360
+        self.aug = tf.keras.layers.RandomRotation(
+            factor=max_angle / 360.0, fill_mode='nearest', seed=None
+        )
 
     def __len__(self):
         return int(np.ceil(len(self.df) / self.batch_size))
 
     def __getitem__(self, idx):
-        batch_x = self.images[idx * self.batch_size:(idx + 1) * self.batch_size]
+        batch_x = np.stack(self.images[idx * self.batch_size:(idx + 1) * self.batch_size])
         batch_y = self.labels[idx * self.batch_size:(idx + 1) * self.batch_size]
-        angles = np.random.uniform(-self.max_angle, self.max_angle, len(batch_x))
-        augmented = np.stack([
-            ndimage.rotate(img, angle, reshape=False, mode='nearest')
-            for img, angle in zip(batch_x, angles)
-        ])
+        augmented = self.aug(batch_x, training=True).numpy()
         return augmented.astype(np.float32), batch_y
 
 
