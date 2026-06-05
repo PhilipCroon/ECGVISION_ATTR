@@ -167,7 +167,7 @@ if len(gpus) > 1:
 else:
     strategy = tf.distribute.get_strategy()  # default single-device strategy
 print(f"Training on {strategy.num_replicas_in_sync} GPU(s)")
-num_workers = max(1, int(multiprocessing.cpu_count() * 0.5))
+num_workers = max(1, int(multiprocessing.cpu_count() * 0.25))
 
 fit_kwargs = dict(
     validation_data=validation_sequence,
