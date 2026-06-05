@@ -40,7 +40,7 @@ from model_helpers import *   # noqa: F401,F403  (ContrastiveModel)
 
 # === Config ===
 LABEL = 'amyloid'
-BATCH_SIZE = 256   # 128 per GPU across 2 GPUs; change back to 128 for single GPU
+BATCH_SIZE = 128
 EPOCHS_FROZEN = 3       # head-only warmup
 EPOCHS = 20             # full fine-tune after unfreeze
 VAL_FRACTION = 0.15          # patient-level holdout from the matched train cohort
