@@ -38,13 +38,33 @@ FORMATS_FILE = project.formats_file
 
 def load_test_cohort():
     path = os.path.join(project.tabs_path, 'cohort_test.csv')
+    assert os.path.exists(path), f"cohort_test.csv not found at {path} — run src/build_cohort.py"
     cohort = pd.read_csv(path)
+    print(f"[load_test_cohort] 1. raw rows: {len(cohort)}")
+    if 'group' in cohort.columns:
+        print(f"[load_test_cohort]    group: {cohort['group'].value_counts().to_dict()}")
+
     cohort[LABEL] = (cohort['group'] == 'amyloid').astype(np.float32)
     cohort['fileID'] = cohort['FileID'].astype(str).str.replace('.dcm$', '', regex=True)
+    print(f"[load_test_cohort] 2. sample fileID: {cohort['fileID'].head(2).tolist()}")
+
     formats = pd.read_csv(FORMATS_FILE).drop_duplicates(subset=['fileID'])
+    print(f"[load_test_cohort] 3. formats sample fileID: {formats['fileID'].head(2).tolist()}  "
+          f"format vals: {formats['format'].value_counts().to_dict()}")
+
     cohort = cohort.merge(formats[['fileID', 'format', 'format_new']], how='inner', on='fileID')
+    print(f"[load_test_cohort] 4. after format merge: {len(cohort)}")
+
     cohort = cohort[(cohort['format'] == 'full') & (cohort['format_new'] == 'full')]
-    return cohort[cohort[LABEL].notna()].copy()
+    print(f"[load_test_cohort] 5. after format=='full' filter: {len(cohort)}")
+
+    cohort = cohort[cohort[LABEL].notna()].copy()
+    if len(cohort) == 0:
+        raise ValueError(
+            "Test cohort is empty after filtering. Check the step counts above: "
+            "step 4 == 0 -> fileID mismatch vs formats file; "
+            "step 5 == 0 -> no 'full'-format ECGs in test split.")
+    return cohort
 
 
 def find_latest_checkpoint():
