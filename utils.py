@@ -44,6 +44,11 @@ try:
 except (ImportError, AttributeError):
     _SIGNALS_BASE = '/mnt/raid0/bb2238/signals'
 
+# New consolidated signal store — holds the post-2024 ECGs that are NOT in the
+# legacy numpy_rp/ or numpy/ dirs. Checked first. Mirrors AUMC_CMR
+# prepare_ecg2cmr_inputs.py load order. Stored as (12, 5000) in mV already.
+_PREPROCESSED_DIR = os.path.join(_SIGNALS_BASE, 'preprocessed', 'all_ecgs')
+
 
 # %%
 
@@ -585,19 +590,36 @@ def make_plot(fid, format_ecg, deterministic=False):
     leads_ordered = ['I', 'II', 'III','aVR', 'aVL', 'aVF','V1','V2','V3','V4','V5','V6']
     columns = 4
 
-    try:
-        signal = np.load(os.path.join(_SIGNALS_BASE, 'numpy_rp', fid+'.npy'), allow_pickle=True)
-        proc_signal = signal[0:5000,:] / 1000
-    except:
-        signal = np.array(np.load(os.path.join(_SIGNALS_BASE, 'numpy', fid+'.npy'), allow_pickle=True))
-        signal = signal.T
-        if fid[0]=='2':
+    # Load raw signal as proc_signal of shape (5000, 12) in mV. Search order mirrors
+    # AUMC_CMR prepare_ecg2cmr_inputs.load_ecg_for_docker:
+    #   1. preprocessed/all_ecgs/<fid>.npy  — new consolidated store, (12,5000) mV
+    #   2. numpy_rp/<fid>.npy               — legacy primary, (>=5000,12) uV
+    #   3. numpy/<fid>.npy                  — legacy fallback, fid-prefix-dependent scale
+    fid_stem = fid[:-4] if fid.lower().endswith('.dcm') else fid
+    pre_path = os.path.join(_PREPROCESSED_DIR, fid_stem + '.npy')
+    if os.path.exists(pre_path):
+        raw = np.load(pre_path, allow_pickle=True)
+        # stored (12, 5000); normalise to (5000, 12)
+        if raw.shape[0] == 12 and raw.shape[1] >= 5000:
+            raw = raw.T
+        proc_signal = raw[0:5000, :]
+        # already mV, but guard against a uV-scaled entry
+        if np.abs(proc_signal).max() > 50:
+            proc_signal = proc_signal / 1000.0
+    else:
+        try:
+            signal = np.load(os.path.join(_SIGNALS_BASE, 'numpy_rp', fid_stem+'.npy'), allow_pickle=True)
+            proc_signal = signal[0:5000,:] / 1000
+        except:
+            signal = np.array(np.load(os.path.join(_SIGNALS_BASE, 'numpy', fid_stem+'.npy'), allow_pickle=True))
             signal = signal.T
-            proc_signal = signal[0:5000,:] / 1000
-        elif fid[0] =='V':
-            proc_signal = signal[0:5000,:] / 1000
-        else:
-            proc_signal = signal[0:5000,:] / 200
+            if fid_stem[0]=='2':
+                signal = signal.T
+                proc_signal = signal[0:5000,:] / 1000
+            elif fid_stem[0] =='V':
+                proc_signal = signal[0:5000,:] / 1000
+            else:
+                proc_signal = signal[0:5000,:] / 200
 
     if format_ecg == '5_0':
         proc_signal = proc_signal[0:2500,:]

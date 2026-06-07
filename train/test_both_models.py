@@ -81,7 +81,12 @@ def main():
           f"pos={int(cohort[LABEL].sum())}")
 
     print("Precomputing standard-layout test images (skips existing)...")
-    save_all_images(cohort, IMAGE_DIR, deterministic=True)
+    status = save_all_images(cohort, IMAGE_DIR, deterministic=True)
+    print(f"  render status: {status}")
+    if status.get('saved', 0) == 0 and status.get('skipped', 0) == 0:
+        raise RuntimeError(
+            f"save_all_images rendered 0 PNGs (status={status}). Signals likely not "
+            f"found — check {IMAGE_DIR} and the make_plot signal search paths.")
 
     print("Loading test images...")
     images = load_images_parallel(cohort['fileID'], IMAGE_DIR)
