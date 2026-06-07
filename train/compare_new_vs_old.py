@@ -4,7 +4,7 @@ Both paths baked in — just run it:
 
     python compare_new_vs_old.py
 
-NEW = best unfrozen checkpoint from the latest training run (auto-detected).
+NEW = attr_amyloid_2026_06_05_unfrozen_06 (best unfrozen checkpoint, val_auroc=0.807).
 OLD = trained_model_Amyloidosis_stage2_age_sex_1_10_15 (epoch 15, image-only).
 Both expect 300x300x3, [0,1]-scaled input — apples-to-apples on cohort_test.csv.
 """
@@ -16,23 +16,16 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import project_constants as project
 
 MODEL_DIR = os.path.join(project.project_root, 'models')
-OLD_MODEL = '/home/pmc57/cmp-jdat-data/variant_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
-
-
-def latest_new_checkpoint():
-    entries = [
-        os.path.join(MODEL_DIR, d) for d in os.listdir(MODEL_DIR)
-        if 'unfrozen' in d and os.path.isdir(os.path.join(MODEL_DIR, d))
-    ]
-    if not entries:
-        raise FileNotFoundError(f"No unfrozen checkpoint in {MODEL_DIR}")
-    return max(entries, key=os.path.getmtime)
+NEW_MODEL = os.path.join(MODEL_DIR, 'attr_amyloid_2026_06_05_unfrozen_06')
+OLD_MODEL = '/home/pmc57/projects/multimodal_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
 
 
 def main():
-    new_model = latest_new_checkpoint()
+    new_model = NEW_MODEL
     print(f"NEW: {new_model}")
     print(f"OLD: {OLD_MODEL}")
+    assert os.path.exists(new_model), (
+        f"NEW model not found at {new_model} — check the dir name in models/")
     if not os.path.exists(OLD_MODEL):
         print(f"\nWARNING: old model not found at {OLD_MODEL} — running NEW only.")
         models = [new_model]
