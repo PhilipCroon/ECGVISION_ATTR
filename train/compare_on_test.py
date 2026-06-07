@@ -28,7 +28,7 @@ from eval import (load_test_cohort, find_latest_checkpoint,
                   sensitivity_at_specificity, specificity_at_sensitivity)
 
 sys.path.append(project.ecg_image_models_path)
-from utils import load_images_parallel
+from utils import load_images_parallel, save_all_images
 
 LABEL = 'amyloid'
 IMAGE_DIR = project.image_dir
@@ -70,10 +70,18 @@ def main():
     cohort = load_test_cohort()
     print(f"\nTest ECGs: {len(cohort)} ({cohort['MRN'].nunique()} MRNs)  "
           f"pos={int(cohort[LABEL].sum())}")
+
+    # Render any missing test images (test ECGs aren't precomputed during training).
+    # save_all_images skips fileIDs whose PNG already exists, so this is cheap on reruns.
+    print("Precomputing test images (skips existing)...")
+    save_all_images(cohort, IMAGE_DIR)
+
     print("Loading test images...")
     images = load_images_parallel(cohort['fileID'], IMAGE_DIR)
     cohort['image_array'] = cohort['fileID'].map(images)
+    n_before = len(cohort)
     cohort = cohort[cohort['image_array'].notna()].reset_index(drop=True)
+    print(f"  loaded {len(cohort)}/{n_before} images ({n_before - len(cohort)} failed to render)")
     assert len(cohort) > 0, f"No images loaded from {IMAGE_DIR}"
     X = np.stack(cohort['image_array'].values)
 

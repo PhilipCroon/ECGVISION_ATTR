@@ -54,7 +54,12 @@ def load_test_cohort(assume_full=True):
         print(f"[load_test_cohort] group: {cohort['group'].value_counts().to_dict()}")
 
     cohort[LABEL] = (cohort['group'] == 'amyloid').astype(np.float32)
-    cohort['fileID'] = cohort['FileID'].astype(str).str.replace('.dcm$', '', regex=True)
+    # New 2025 ECGs use full paths like /data/ecg/<ts>_<hex>.xml; old ones are bare
+    # stems. Reduce both to the bare stem make_plot expects (basename, no extension).
+    # Matches AUMC_CMR prepare_ecg2cmr_inputs.py line 254-257.
+    cohort['fileID'] = cohort['FileID'].astype(str).map(
+        lambda f: os.path.splitext(os.path.basename(f))[0])
+    print(f"[load_test_cohort] sample cleaned fileID: {cohort['fileID'].head(2).tolist()}")
 
     if assume_full:
         cohort['format'] = 'full'
