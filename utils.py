@@ -556,7 +556,7 @@ def custom_ecg_plot_new(
     return data
 
 
-def make_plot(fid, format_ecg):
+def make_plot(fid, format_ecg, deterministic=False):
     formats = ["alternate", "shuffled", "0rhythm", "1rhythm","2rhythm","3rhythm"]
     colors = ["bw", "orange", "green", "pink","blank"]
     label_y_offset = [-0.5,0.5]
@@ -564,12 +564,23 @@ def make_plot(fid, format_ecg):
     label_font_style = ['DejaVu Serif','DejaVu Sans','STIXGeneral']
     line_width = [0.3,0.5,0.7,0.9]
 
-    selected_format = random.choice(formats)
-    selected_color = random.choice(colors)
-    selected_label_y_offset = random.choice(label_y_offset)
-    selected_fontsize_plot = random.choice(fontsize_plot)
-    selected_label_font_style = random.choice(label_font_style)
-    selected_line_width = random.choice(line_width)
+    if deterministic:
+        # Fixed standard 12-lead render for evaluation: no style randomness, so
+        # AUROC reflects the model, not lucky/unlucky layout. 'alternate' = clean
+        # 2-column 12-lead (12 rows, 12 labels, no rhythm-strip edge cases).
+        selected_format = 'alternate'
+        selected_color = 'bw'
+        selected_label_y_offset = -0.5
+        selected_fontsize_plot = 9
+        selected_label_font_style = 'DejaVu Sans'
+        selected_line_width = 0.5
+    else:
+        selected_format = random.choice(formats)
+        selected_color = random.choice(colors)
+        selected_label_y_offset = random.choice(label_y_offset)
+        selected_fontsize_plot = random.choice(fontsize_plot)
+        selected_label_font_style = random.choice(label_font_style)
+        selected_line_width = random.choice(line_width)
 
     leads_ordered = ['I', 'II', 'III','aVR', 'aVL', 'aVF','V1','V2','V3','V4','V5','V6']
     columns = 4
@@ -817,13 +828,14 @@ class DataSequenceTrain_RAM(tf.keras.utils.Sequence):
         return batch_x, batch_y
 
 
-def save_all_images(df, output_dir, num_workers=None, overwrite=False):
+def save_all_images(df, output_dir, num_workers=None, overwrite=False, deterministic=False):
     os.makedirs(output_dir, exist_ok=True)
     if num_workers is None:
         num_workers = max(1, cpu_count() - 1)
-    print(f"number of workers = {num_workers} (overwrite={overwrite})")
+    print(f"number of workers = {num_workers} (overwrite={overwrite}, deterministic={deterministic})")
 
-    func = partial(save_image_from_row, output_dir=output_dir, overwrite=overwrite)
+    func = partial(save_image_from_row, output_dir=output_dir, overwrite=overwrite,
+                   deterministic=deterministic)
     statuses = []
     with Pool(num_workers) as pool:
         for status in tqdm(pool.imap(func, df.to_dict('records')), total=len(df), desc="Saving ECG Images"):
@@ -833,7 +845,7 @@ def save_all_images(df, output_dir, num_workers=None, overwrite=False):
     return dict(Counter(statuses))
 
 
-def save_image_from_row(row, output_dir, overwrite=False):
+def save_image_from_row(row, output_dir, overwrite=False, deterministic=False):
     fid = row['fileID']
     fmt = row.get('format_new', None)
     os.makedirs(output_dir, exist_ok=True)
@@ -843,7 +855,7 @@ def save_image_from_row(row, output_dir, overwrite=False):
     if os.path.exists(out_path) and not overwrite:
         return 'skipped'
     try:
-        img = make_plot(fid, fmt)
+        img = make_plot(fid, fmt, deterministic=deterministic)
         img_pil = Image.fromarray(img).convert('RGB').resize((300, 300))
         img_pil.save(out_path, format='PNG')
         return 'saved'

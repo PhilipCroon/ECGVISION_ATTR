@@ -31,7 +31,9 @@ sys.path.append(project.ecg_image_models_path)
 from utils import load_images_parallel, save_all_images
 
 LABEL = 'amyloid'
-IMAGE_DIR = project.image_dir
+# Dedicated dir for deterministic standard-layout test renders — kept separate
+# from the random-style training PNGs so caching works and there's no collision.
+IMAGE_DIR = project.image_dir + '_test_std'
 MODEL_DIR = os.path.join(project.project_root, 'models')
 
 
@@ -71,10 +73,11 @@ def main():
     print(f"\nTest ECGs: {len(cohort)} ({cohort['MRN'].nunique()} MRNs)  "
           f"pos={int(cohort[LABEL].sum())}")
 
-    # Render any missing test images (test ECGs aren't precomputed during training).
-    # save_all_images skips fileIDs whose PNG already exists, so this is cheap on reruns.
-    print("Precomputing test images (skips existing)...")
-    save_all_images(cohort, IMAGE_DIR)
+    # Render any missing test images with a FIXED standard layout (deterministic=True):
+    # clean 12-lead, bw, no style randomness, so AUROC reflects the model not the render.
+    # save_all_images skips fileIDs whose PNG already exists, so reruns are cheap.
+    print("Precomputing standard-layout test images (skips existing)...")
+    save_all_images(cohort, IMAGE_DIR, deterministic=True)
 
     print("Loading test images...")
     images = load_images_parallel(cohort['fileID'], IMAGE_DIR)
