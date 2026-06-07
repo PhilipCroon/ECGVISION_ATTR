@@ -110,10 +110,25 @@ cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_20.csv'))
 # Binary label
 cohort[LABEL] = (cohort['group'] == 'amyloid').astype(np.float32)
 
-# fileID key + format filter (mirror production script)
-cohort['fileID'] = cohort['FileID'].astype(str).str.replace('.dcm$', '', regex=True)
+# fileID key: new 2025 ECGs use full paths like /data/ecg/<ts>_<hex>.xml; old ones
+# are bare stems or <id>.dcm. Reduce both to the bare basename stem make_plot expects
+# (matches eval.load_test_cohort + AUMC_CMR prepare_ecg2cmr_inputs).
+cohort['fileID'] = cohort['FileID'].astype(str).map(
+    lambda f: os.path.splitext(os.path.basename(f))[0])
+
+# format filter: old ECGs are looked up in formats_rerun.csv and kept only if
+# format/format_new == 'full'. New ECGs are NOT in that file (different fileID
+# scheme); they are standard PyP-workup 12-leads, so LEFT-merge + fill 'full'
+# instead of dropping them with an inner join. The n_new print is the tripwire:
+# it should be ~the number of post-update ECGs, NOT wildly larger. If large,
+# formats_rerun.csv is patchy and old ECGs of unknown layout are being assumed full.
 formats = pd.read_csv(FORMATS_FILE).drop_duplicates(subset=['fileID'])
-cohort = cohort.merge(formats[['fileID', 'format', 'format_new']], how='inner', on='fileID')
+n_before = len(cohort)
+cohort = cohort.merge(formats[['fileID', 'format', 'format_new']], how='left', on='fileID')
+n_new = int(cohort['format'].isna().sum())
+print(f"[train] {n_new}/{n_before} ECGs not in formats_rerun.csv -> assumed 'full' (new scheme)")
+cohort['format'] = cohort['format'].fillna('full')
+cohort['format_new'] = cohort['format_new'].fillna('full')
 cohort = cohort[(cohort['format'] == 'full') & (cohort['format_new'] == 'full')]
 cohort = cohort[cohort[LABEL].notna()].copy()
 
