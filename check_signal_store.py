@@ -56,23 +56,46 @@ def main():
     if not os.path.exists(QC):
         print(f"  MISSING: {QC}")
         return
-    qc = pd.read_csv(QC, low_memory=False)
-    print(f"  rows: {len(qc):,}")
-    print(f"  cols: {list(qc.columns)}")
-    idc = [c for c in qc.columns if any(k in c.lower() for k in ('file', 'id', 'path'))]
-    print(f"\n  id/path cols: {idc}")
+    print(f"  size on disk: {os.path.getsize(QC):,} bytes", flush=True)
+    head = pd.read_csv(QC, nrows=5, low_memory=False)
+    cols = list(head.columns)
+    print(f"  cols: {cols}", flush=True)
+    idc = [c for c in cols if any(k in c.lower() for k in ('file', 'id', 'path'))]
+    print(f"\n  id/path cols: {idc}", flush=True)
     if idc:
-        print(qc[idc].head(10).to_string())
-    qc_dates = show_dates(qc, 'qc_metadata')
+        print(head[idc].to_string(), flush=True)
 
-    # --- 2. Does qc cover post-cutoff ECGs (i.e. more data than current key)? ---
+    # date coverage via chunked scan (file may be huge) — only date cols loaded
+    qc_dates = [c for c in cols if 'date' in c.lower()]
+    print(f"\n  date cols: {qc_dates}", flush=True)
     section("2. More data than the current key?")
-    has_new = any(int((pd.to_datetime(qc[c], errors='coerce') > CUTOFF).sum()) > 0 for c in qc_dates)
-    print(f"  qc_metadata has ECGs after {CUTOFF}: {has_new}")
+    if qc_dates:
+        agg = {c: {'min': None, 'max': None, 'after': 0} for c in qc_dates}
+        n = 0
+        for chunk in pd.read_csv(QC, usecols=qc_dates, chunksize=500_000, low_memory=False):
+            n += len(chunk)
+            for c in qc_dates:
+                s = pd.to_datetime(chunk[c], errors='coerce')
+                mn, mx = s.min(), s.max()
+                if pd.notna(mn):
+                    agg[c]['min'] = mn if agg[c]['min'] is None else min(agg[c]['min'], mn)
+                if pd.notna(mx):
+                    agg[c]['max'] = mx if agg[c]['max'] is None else max(agg[c]['max'], mx)
+                agg[c]['after'] += int((s > CUTOFF).sum())
+            print(f"    ...scanned {n:,} rows", flush=True)
+        print(f"  total rows: {n:,}")
+        for c in qc_dates:
+            a = agg[c]
+            print(f"    {c:30s} min={a['min']}  max={a['max']}  rows>{CUTOFF}={a['after']:,}")
+        has_new = any(agg[c]['after'] > 0 for c in qc_dates)
+        print(f"\n  >>> qc_metadata has ECGs after {CUTOFF}: {has_new}")
+    else:
+        print("  no date column in qc_metadata — cannot judge coverage")
     if os.path.exists(CUR_KEY):
         cur = pd.read_csv(CUR_KEY, low_memory=False, nrows=200_000)
         print(f"\n  current key sample ({len(cur):,} rows):")
         show_dates(cur, 'current_key')
+    qc = head  # for sections 3/4 we only need column names + a sample
 
     # --- 3. Resolve a few keys against disk ---
     section("3. Do the index keys resolve to .npy on disk?")
@@ -101,16 +124,52 @@ def main():
         except Exception as e:
             print(f"  load sample failed: {e}")
 
-    # --- 4. Cross-check against the cohort fileID, if present ---
-    section("4. Cohort fileID vs store key")
-    coh_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tabs', 'cohort_test.csv')
-    if os.path.exists(coh_path):
-        coh = pd.read_csv(coh_path, low_memory=False)
-        fcols = [c for c in coh.columns if 'ile' in c.lower()]
-        print(f"  cohort_test cols with 'ile': {fcols}")
-        print(coh[fcols].head(8).to_string())
-    else:
+    # --- 4. Cross-check against the cohort fileID (at project.tabs_path) ---
+    section("4. Cohort fileID vs store key (2-tier resolution)")
+    try:
+        import project_constants as project
+        coh_path = os.path.join(project.tabs_path, 'cohort_test.csv')
+    except Exception:
+        coh_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tabs', 'cohort_test.csv')
+    if not os.path.exists(coh_path):
         print(f"  cohort_test.csv not found at {coh_path}")
+        return
+    coh = pd.read_csv(coh_path, low_memory=False)
+    fcols = [c for c in coh.columns if 'ile' in c.lower()]
+    print(f"  path: {coh_path}  rows={len(coh)}")
+    print(f"  cols with 'ile': {fcols}")
+    print(coh[fcols].head(10).to_string())
+
+    # pick the column that looks like the relative path (has '/'), else FileID/fileID
+    rel_col = next((c for c in fcols if coh[c].astype(str).str.contains('/').any()), None)
+    print(f"\n  column with subdir prefixes ('/'): {rel_col}")
+
+    NUMPY_RP = '/mnt/raid0/bb2238/signals/numpy_rp'
+    NUMPY    = '/mnt/raid0/bb2238/signals/numpy'
+
+    def resolve(fid):
+        fid = str(fid)
+        stem = fid[:-4] if fid.lower().endswith(('.npy', '.dcm', '.xml')) else fid
+        # tier 1: store, full relative path
+        if os.path.exists(os.path.join(STORE, stem + '.npy')):
+            return 'store'
+        # tier 2: legacy numpy_rp / numpy, bare basename
+        base = os.path.basename(stem)
+        if os.path.exists(os.path.join(NUMPY_RP, base + '.npy')):
+            return 'numpy_rp'
+        if os.path.exists(os.path.join(NUMPY, base + '.npy')):
+            return 'numpy'
+        return 'MISSING'
+
+    for col in [c for c in [rel_col, 'fileID', 'FileID'] if c and c in coh.columns]:
+        from collections import Counter
+        vals = coh[col].dropna().astype(str)
+        res = Counter(resolve(v) for v in vals.head(200))
+        print(f"\n  resolve first 200 of '{col}': {dict(res)}")
+        # show a couple of new-scheme examples
+        ex = vals[vals.str.contains('/')].head(3).tolist() or vals.head(3).tolist()
+        for e in ex:
+            print(f"    e.g. {e!r:60s} -> {resolve(e)}")
 
 
 if __name__ == '__main__':
