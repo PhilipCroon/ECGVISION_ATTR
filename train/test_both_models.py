@@ -36,7 +36,8 @@ LABEL = 'amyloid'
 MODEL_DIR = os.path.join(project.project_root, 'models')
 
 # --- the two models to compare (baked in) ---
-NEW_MODEL = os.path.join(MODEL_DIR, 'attr_amyloid_2026_06_05_unfrozen_06')
+_nm = os.getenv('NEW_MODEL', 'attr_amyloid_2026_06_05_unfrozen_06')
+NEW_MODEL = _nm if os.path.isabs(_nm) else os.path.join(MODEL_DIR, _nm)
 OLD_MODEL = '/home/pmc57/cmp-jdat-data/variant_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
 
 # Dedicated dir for deterministic standard-layout renders — kept separate from the
