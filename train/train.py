@@ -202,7 +202,10 @@ print("=" * 64 + "\n")
 _model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
 print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
 
-train_sequence = DataSequenceAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
+AUG_MODE = os.getenv('AUG', 'rotate')   # 'rotate' (default) | 'scan' (scan/print artifacts)
+print(f"Augmentation mode: {AUG_MODE}")
+train_sequence = DataSequenceAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL,
+                                    aug_mode=AUG_MODE)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # %% === Train ===
@@ -266,7 +269,8 @@ registry_row = dict(
     class_weights=str(_model_module.CLASS_WEIGHTS.tolist()),
     match_ratio=getattr(project, 'MATCH_RATIO', None),
     data_key=os.path.basename(project.ecg_metadata_file),
-    augmentation='rotation+-10deg',
+    augmentation=('rotation+-10deg+scan(bright,contrast,noise,blur,jpeg)'
+                  if AUG_MODE == 'scan' else 'rotation+-10deg'),
     batch_size=BATCH_SIZE,
     epochs_frozen=EPOCHS_FROZEN,
     epochs_unfrozen=EPOCHS,

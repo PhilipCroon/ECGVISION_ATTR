@@ -805,27 +805,59 @@ class DataSequenceAugRAM(tf.keras.utils.Sequence):
     Uses TF RandomRotation (faster than scipy ndimage, no Python GIL bottleneck).
     Expects a column 'image_array' with shape (300, 300, 3) in the input dataframe.
     Images should already be normalised to [0, 1].
+
+    aug_mode:
+      'rotate' (default) — rotation only (original behaviour).
+      'scan'             — rotation + scan/print-artifact augmentation (brightness,
+                           contrast, grain noise, blur, JPEG) so the model generalises
+                           to scanned paper ECGs (e.g. SCAN-MP), which are OOD vs the
+                           clean digital make_plot renders it trains on.
     """
-    def __init__(self, df, batch_size, label, max_angle=10):
+    def __init__(self, df, batch_size, label, max_angle=10, aug_mode='rotate'):
         self.df = df.reset_index(drop=True)
         self.images = df['image_array'].values
         self.labels = df[[label]].values.astype(np.float32)
         self.batch_size = batch_size
+        self.aug_mode = aug_mode
         # factor = fraction of full rotation; ±max_angle degrees = max_angle/360
         # dtype='float32': ImageProjectiveTransformV3 rejects bfloat16 (mixed-precision global policy)
         self.aug = tf.keras.layers.RandomRotation(
             factor=max_angle / 360.0, fill_mode='nearest', seed=None, dtype='float32'
         )
+        if aug_mode == 'scan':
+            # 5x5 separable gaussian kernel for optional blur (depthwise, 3 channels)
+            k = np.array([1, 4, 6, 4, 1], np.float32)
+            k = np.outer(k, k); k /= k.sum()
+            self.blur_kernel = tf.constant(
+                np.repeat(k.reshape(5, 5, 1, 1), 3, axis=2))  # (5,5,3,1)
 
     def __len__(self):
         return int(np.ceil(len(self.df) / self.batch_size))
 
+    def _scan_augment(self, x):
+        # x: (B,300,300,3) float32 [0,1], eager on CPU. Simulates scanned-paper ECGs.
+        x = tf.image.random_brightness(x, 0.12)
+        x = tf.image.random_contrast(x, 0.85, 1.15)
+        sigma = tf.random.uniform([], 0.0, 0.03)                    # scan grain
+        x = tf.clip_by_value(x + tf.random.normal(tf.shape(x), 0.0, sigma), 0.0, 1.0)
+        if float(tf.random.uniform([])) < 0.5:                      # print/scan softening
+            x = tf.nn.depthwise_conv2d(x, self.blur_kernel, [1, 1, 1, 1], 'SAME')
+        x = tf.map_fn(lambda im: tf.image.random_jpeg_quality(im, 50, 95), x)  # compression artifacts
+        return tf.clip_by_value(x, 0.0, 1.0)
+
     def __getitem__(self, idx):
         batch_x = np.stack(self.images[idx * self.batch_size:(idx + 1) * self.batch_size])
         batch_y = self.labels[idx * self.batch_size:(idx + 1) * self.batch_size]
-        # Run rotation on CPU so it doesn't contend with training on the GPU stream
+        # Run aug on CPU so it doesn't contend with training on the GPU stream
         with tf.device('/CPU:0'):
-            augmented = self.aug(batch_x.astype(np.float32), training=True).numpy()
+            x = self.aug(batch_x.astype(np.float32), training=True)
+            if self.aug_mode == 'scan':
+                try:
+                    x = self._scan_augment(x)
+                except Exception as e:
+                    # never let an aug op kill an overnight run — fall back to rotation
+                    print(f"[scan aug] skipped batch (fell back to rotate): {e}")
+            augmented = x.numpy()
         return augmented.astype(np.float32), batch_y
 
 
