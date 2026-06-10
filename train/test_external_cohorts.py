@@ -33,6 +33,14 @@ _nm = os.getenv('NEW_MODEL', 'attr_amyloid_2026_06_05_unfrozen_06')
 NEW_MODEL = _nm if os.path.isabs(_nm) else os.path.join(MODEL_DIR, _nm)
 OLD_MODEL = '/home/pmc57/cmp-jdat-data/variant_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
 
+# Optional YOLO ECG-region crop, matching the deploy pipeline (ynhh-apis
+# data_api/app/model.py YOLOCropper). OFF by default to preserve the no-crop deltas.
+# CROP=1 enables it for ALL cohorts (deploy fidelity). Scanned printouts (SCAN-MP)
+# have the ECG small in a full page -> no-crop resize makes it tiny/OOD; crop fixes that.
+CROP_ENABLED = os.getenv('CROP', '0') == '1'
+YOLO_WEIGHTS = os.getenv('YOLO_WEIGHTS', '')
+YOLO_CONF = float(os.getenv('YOLO_CONF', '0.8'))
+
 IMG_SUFFIXES = ('.png', '.jpg', '.jpeg')
 
 # case folder -> label 1, control folder -> label 0 (paths from run_models_ext.py)
@@ -169,22 +177,67 @@ def list_images(folder):
     return sorted(out)
 
 
+def _raster_pil(path):
+    # Load a file to a full-res RGB PIL image. PDFs (Greece/SCAN-MP) -> page0 @ dpi=300
+    # (same as deploy data_api main.py:108-114). No resize/grayscale yet.
+    if path.lower().endswith('.pdf'):
+        pages = convert_from_path(path, dpi=300, first_page=1, last_page=1)
+        if not pages:
+            return None
+        return pages[0].convert('RGB')
+    return Image.fromarray(np.array(Image.open(path))).convert('RGB')
+
+
+def _finish(pil):
+    # amyloid-service preprocessing: L->RGB->resize300, [0,1] float32.
+    return sk_resize(np.array(pil.convert('L').convert('RGB')), (300, 300)).astype(np.float32)
+
+
 def make_image(path):
-    # exact deployment preprocessing (ynhh-apis app.make_image). PDFs (Greece) are
-    # rasterized first: page0 @ dpi=300, same as deploy (data_api main.py:108-114),
-    # then the identical L->RGB->resize300. NO YOLO crop.
+    # No-crop path (runs in the fork Pool): raster -> finish. Deploy preprocessing
+    # minus the YOLO crop.
     try:
-        if path.lower().endswith('.pdf'):
-            pages = convert_from_path(path, dpi=300, first_page=1, last_page=1)
-            if not pages:
-                return None
-            arr = np.array(pages[0].convert('RGB'))
-        else:
-            arr = np.array(Image.open(path))
-        return sk_resize(np.array(Image.fromarray(arr).convert('L').convert('RGB')), (300, 300)).astype(np.float32)
+        pil = _raster_pil(path)
+        return _finish(pil) if pil is not None else None
     except Exception as e:
         print(f"load fail {path}: {e}")
         return None
+
+
+class YOLOCropper:
+    """Ported from ynhh-apis data_api/app/model.py: detect ECG box, crop largest,
+    rotate -90 if portrait. Returns (pil, cropped?). NEVER run inside the fork Pool
+    (torch+CUDA not fork-safe) — instantiate + call in the main process."""
+    def __init__(self, weights_path):
+        from ultralytics import YOLO   # imported lazily so non-crop runs don't need it
+        if not os.path.exists(weights_path):
+            raise FileNotFoundError(f"YOLO weights not found at {weights_path}")
+        self.model = YOLO(weights_path)
+
+    def crop(self, pil, conf):
+        results = self.model.predict(pil, conf=conf, verbose=False)
+        if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+            return pil, False
+        boxes = results[0].boxes.xyxy.cpu().numpy()
+        x1, y1, x2, y2 = max(boxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
+        cropped = pil.crop((int(x1), int(y1), int(x2), int(y2)))
+        if cropped.height > cropped.width:
+            cropped = cropped.rotate(-90, expand=True)
+        return cropped, True
+
+
+def load_raw_then_crop(path, cropper, conf):
+    # CROP path (sequential, main process): raster full-res -> YOLO crop -> finish.
+    # One full-res image in RAM at a time (no holding 645 @ 300dpi).
+    try:
+        pil = _raster_pil(path)
+        if pil is None:
+            return None, False
+        cropped, did = cropper.crop(pil, conf)
+        return _finish(cropped), did
+    except Exception as e:
+        print(f"load fail {path}: {e}")
+        return None, False
 
 
 def predict(model, X, batch_size=256):
@@ -215,13 +268,30 @@ def main():
         print("No images found — check the cohort paths.")
         return
 
-    # --- load images in parallel, BEFORE GPU init (CUDA not fork-safe) ---
-    nworkers = max(1, cpu_count() - 2)
-    print(f"\nLoading {len(df)} images with {nworkers} workers...")
-    with Pool(nworkers) as pool:
-        imgs = list(tqdm(pool.imap(make_image, df['path'].tolist(), chunksize=8),
-                         total=len(df), desc="load"))
-    df['img'] = imgs
+    if CROP_ENABLED:
+        # YOLO crop path: sequential in main process (torch+CUDA not fork-safe).
+        # One full-res image in RAM at a time. Applies to ALL cohorts for deploy fidelity.
+        if not YOLO_WEIGHTS:
+            raise SystemExit("CROP=1 but YOLO_WEIGHTS unset — point it at the deploy "
+                             "best.pt (ynhh-apis .../data_api/models/train4_yolo/weights/best.pt)")
+        print(f"\nCROP=1: YOLO crop enabled (weights={YOLO_WEIGHTS}, conf={YOLO_CONF})")
+        cropper = YOLOCropper(YOLO_WEIGHTS)
+        imgs, crops = [], 0
+        for p in tqdm(df['path'].tolist(), desc="raster+crop"):
+            img, did = load_raw_then_crop(p, cropper, YOLO_CONF)
+            imgs.append(img)
+            crops += bool(did)
+        df['img'] = imgs
+        n_ok = sum(i is not None for i in imgs)
+        print(f"cropped {crops}/{n_ok} images (rest: no YOLO detection -> used full frame)")
+    else:
+        # No-crop path: parallel raster+resize in fork Pool, BEFORE GPU init.
+        nworkers = max(1, cpu_count() - 2)
+        print(f"\nLoading {len(df)} images with {nworkers} workers (no crop)...")
+        with Pool(nworkers) as pool:
+            imgs = list(tqdm(pool.imap(make_image, df['path'].tolist(), chunksize=8),
+                             total=len(df), desc="load"))
+        df['img'] = imgs
     df = df[df['img'].notna()].reset_index(drop=True)
     X = np.stack(df['img'].values).astype(np.float32)
     print(f"loaded {len(df)} images")
@@ -233,7 +303,8 @@ def main():
         sub = df[df['cohort'] == cname]
         if not len(sub):
             continue
-        check_dir = os.path.join(project.tabs_path, f'{cname.lower()}_render_check')
+        suffix = '_crop' if CROP_ENABLED else ''
+        check_dir = os.path.join(project.tabs_path, f'{cname.lower()}_render_check{suffix}')
         os.makedirs(check_dir, exist_ok=True)
         for i in range(min(5, len(sub))):
             Image.fromarray((sub['img'].iloc[i] * 255).astype(np.uint8)).save(
@@ -269,7 +340,8 @@ def main():
             m = {'n': len(g), 'pos': int(y.sum()), 'auroc': auroc, 'auprc': auprc,
                  'sens_90spec': sens, 'spec_90sens': spec}
             rows.append({'model': tag, 'cohort': name, **m})
-            log_eval(path, cohort=name, metrics=m, render='deploy_image', level='image')
+            log_eval(path, cohort=name, metrics=m,
+                     render='deploy_yolocrop' if CROP_ENABLED else 'deploy_nocrop', level='image')
         del model
         tf.keras.backend.clear_session()
 
