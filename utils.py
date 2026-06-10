@@ -571,6 +571,54 @@ def custom_ecg_plot_new(
     return data
 
 
+def load_signal_mV(fid, format_ecg='full'):
+    """Load a 12-lead ECG as (5000, 12) in mV.
+
+    Search order (mirrors AUMC_CMR load_ecg_for_docker, plus an nfs fallback for new
+    pdcfs1 ECGs not yet consolidated into the raid store):
+      1. raid store preprocessed/all_ecgs/<fid>.npy  — (12,5000)/(5000,12) mV, orient only
+      2. numpy_rp/<fid>.npy  (raid, then nfs)         — uV -> /1000
+      3. numpy/<fid>.npy     (raid, then nfs)         — fid-prefix scale (pdcfs1 'p' -> /200)
+    Returns (5000, 12) float in mV. Single source of truth for signal loading.
+    """
+    fid_stem = fid[:-4] if fid.lower().endswith('.dcm') else fid
+
+    def _first(bases, sub):
+        for b in bases:
+            p = os.path.join(b, sub, fid_stem + '.npy')
+            if os.path.exists(p):
+                return p
+        return None
+
+    store_p = os.path.join(_PREPROCESSED_DIR, fid_stem + '.npy')
+    if os.path.exists(store_p):
+        raw = np.asarray(np.load(store_p, allow_pickle=True))
+        if raw.shape[0] == 12 and raw.shape[1] >= 5000:
+            raw = raw.T
+        proc_signal = raw[0:5000, :]
+    else:
+        rp = _first([_SIGNALS_BASE, _NFS_BASE], 'numpy_rp')
+        if rp is not None:
+            signal = np.load(rp, allow_pickle=True)
+            proc_signal = signal[0:5000, :] / 1000
+        else:
+            np_path = _first([_SIGNALS_BASE, _NFS_BASE], 'numpy')
+            signal = np.array(np.load(np_path, allow_pickle=True))
+            signal = signal.T
+            if fid_stem[0] == '2':
+                signal = signal.T
+                proc_signal = signal[0:5000, :] / 1000
+            elif fid_stem[0] == 'V':
+                proc_signal = signal[0:5000, :] / 1000
+            else:
+                proc_signal = signal[0:5000, :] / 200
+
+    if format_ecg == '5_0':
+        proc_signal = proc_signal[0:2500, :]
+        proc_signal = scipy.signal.resample(np.array(proc_signal), 5000)
+    return proc_signal
+
+
 def make_plot(fid, format_ecg, deterministic=False):
     formats = ["alternate", "shuffled", "0rhythm", "1rhythm","2rhythm","3rhythm"]
     colors = ["bw", "orange", "green", "pink","blank"]
@@ -600,52 +648,9 @@ def make_plot(fid, format_ecg, deterministic=False):
     leads_ordered = ['I', 'II', 'III','aVR', 'aVL', 'aVF','V1','V2','V3','V4','V5','V6']
     columns = 4
 
-    # Load raw signal as proc_signal of shape (5000, 12) in mV. Search order mirrors
-    # AUMC_CMR prepare_ecg2cmr_inputs.load_ecg_for_docker:
-    #   1. preprocessed/all_ecgs/<fid>.npy  — new consolidated store, (12,5000) mV
-    #   2. numpy_rp/<fid>.npy               — legacy primary, (>=5000,12) uV
-    #   3. numpy/<fid>.npy                  — legacy fallback, fid-prefix-dependent scale
-    fid_stem = fid[:-4] if fid.lower().endswith('.dcm') else fid
-
-    def _first(bases, sub):
-        for b in bases:
-            p = os.path.join(b, sub, fid_stem + '.npy')
-            if os.path.exists(p):
-                return p
-        return None
-
-    # 1. raid QC store: already (5000,12)/(12,5000) mV (scaled+unpadded). Orient only,
-    #    do NOT rescale. Verified: store == raw/200 for pdcfs1 (qc_metadata scaled_by=200).
-    store_p = os.path.join(_PREPROCESSED_DIR, fid_stem + '.npy')
-    if os.path.exists(store_p):
-        raw = np.asarray(np.load(store_p, allow_pickle=True))
-        if raw.shape[0] == 12 and raw.shape[1] >= 5000:
-            raw = raw.T
-        proc_signal = raw[0:5000, :]
-    else:
-        # 2. Raw stores — original per-source scaling. Search raid first, then nfs
-        #    (new pdcfs1 lands on nfs numpy/ before bb2238 consolidates to the store).
-        #    numpy_rp = uV -> /1000;  numpy = fid-prefix scale (pdcfs1 'p' -> /200,
-        #    matching the store's scaled_by=200). PRESERVED from the original loader.
-        rp = _first([_SIGNALS_BASE, _NFS_BASE], 'numpy_rp')
-        if rp is not None:
-            signal = np.load(rp, allow_pickle=True)
-            proc_signal = signal[0:5000,:] / 1000
-        else:
-            np_path = _first([_SIGNALS_BASE, _NFS_BASE], 'numpy')
-            signal = np.array(np.load(np_path, allow_pickle=True))
-            signal = signal.T
-            if fid_stem[0]=='2':
-                signal = signal.T
-                proc_signal = signal[0:5000,:] / 1000
-            elif fid_stem[0] =='V':
-                proc_signal = signal[0:5000,:] / 1000
-            else:
-                proc_signal = signal[0:5000,:] / 200
-
-    if format_ecg == '5_0':
-        proc_signal = proc_signal[0:2500,:]
-        proc_signal = scipy.signal.resample(np.array(proc_signal), 5000)
+    # Signal load + mV scaling + 5_0 resample factored into load_signal_mV (shared
+    # with the deployment-style test renderer).
+    proc_signal = load_signal_mV(fid, format_ecg)
 
     proc_signal2 = proc_signal - median_filter(proc_signal,size=(500,1))
     full = proc_signal2.T
