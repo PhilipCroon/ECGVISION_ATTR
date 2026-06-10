@@ -54,12 +54,17 @@ def load_test_cohort(assume_full=True):
         print(f"[load_test_cohort] group: {cohort['group'].value_counts().to_dict()}")
 
     cohort[LABEL] = (cohort['group'] == 'amyloid').astype(np.float32)
-    # New 2025 ECGs use full paths like /data/ecg/<ts>_<hex>.xml; old ones are bare
-    # stems. Reduce both to the bare stem make_plot expects (basename, no extension).
-    # Matches AUMC_CMR prepare_ecg2cmr_inputs.py line 254-257.
-    cohort['fileID'] = cohort['FileID'].astype(str).map(
-        lambda f: os.path.splitext(os.path.basename(f))[0])
-    print(f"[load_test_cohort] sample cleaned fileID: {cohort['fileID'].head(2).tolist()}")
+    # 'fileID' from the ECG metadata is the store-relative key (e.g. pdcfs1/2024/03/...,
+    # ekg_waveform_2021/..., or a bare stem for old ECGs). make_plot loads
+    # all_ecgs/<fileID>.npy, so it MUST keep its subdir prefix. Do NOT basename it
+    # (that was the old bug — it stripped pdcfs1/<yr>/<mo>/ and the file vanished).
+    # Only fall back to a basename of FileID if the relative fileID column is absent.
+    if 'fileID' in cohort.columns and cohort['fileID'].notna().any():
+        cohort['fileID'] = cohort['fileID'].astype(str)
+    else:
+        cohort['fileID'] = cohort['FileID'].astype(str).map(
+            lambda f: os.path.splitext(os.path.basename(f))[0])
+    print(f"[load_test_cohort] sample fileID: {cohort['fileID'].head(2).tolist()}")
 
     if assume_full:
         cohort['format'] = 'full'

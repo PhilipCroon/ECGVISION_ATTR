@@ -110,11 +110,15 @@ cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_20.csv'))
 # Binary label
 cohort[LABEL] = (cohort['group'] == 'amyloid').astype(np.float32)
 
-# fileID key: new 2025 ECGs use full paths like /data/ecg/<ts>_<hex>.xml; old ones
-# are bare stems or <id>.dcm. Reduce both to the bare basename stem make_plot expects
-# (matches eval.load_test_cohort + AUMC_CMR prepare_ecg2cmr_inputs).
-cohort['fileID'] = cohort['FileID'].astype(str).map(
-    lambda f: os.path.splitext(os.path.basename(f))[0])
+# fileID key: 'fileID' from the ECG metadata is the store-relative path (e.g.
+# pdcfs1/2024/03/..., ekg_waveform_2021/..., or a bare stem for old ECGs). make_plot
+# loads all_ecgs/<fileID>.npy, so the subdir prefix MUST be kept. Do NOT basename it.
+# Fall back to basename(FileID) only if the relative fileID column is absent.
+if 'fileID' in cohort.columns and cohort['fileID'].notna().any():
+    cohort['fileID'] = cohort['fileID'].astype(str)
+else:
+    cohort['fileID'] = cohort['FileID'].astype(str).map(
+        lambda f: os.path.splitext(os.path.basename(f))[0])
 
 # format filter: old ECGs are looked up in formats_rerun.csv and kept only if
 # format/format_new == 'full'. New ECGs are NOT in that file (different fileID

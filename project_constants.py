@@ -21,8 +21,23 @@ source_tabs = '/home/pmc57/projects/multimodal_amyloid/tabs'
 
 # Reused files (read-only). Confirm these did NOT also update before running.
 echo_outcomes_file = os.path.join(source_tabs, 'amyloid_echo_outcomes.csv')
-ecg_metadata_file = os.path.join(
-    signals, 'data_LD/ecg_metadata_flagged_01jan2000_to_17july2025.csv')
+
+
+def _latest_ecg_metadata():
+    """Newest ecg_metadata_flagged_*.csv in data_LD (by mtime).
+
+    build_ecg_metadata.py writes a fresh dated file when the source parquets are
+    refreshed (e.g. the pdcfs1 Philips-XML feed extended past July 2025). Picking
+    by mtime — not lexical name — so the most recently regenerated key wins.
+    """
+    import glob
+    cands = glob.glob(os.path.join(signals, 'data_LD', 'ecg_metadata_flagged_*.csv'))
+    if cands:
+        return max(cands, key=os.path.getmtime)
+    return os.path.join(signals, 'data_LD/ecg_metadata_flagged_01jan2000_to_17july2025.csv')
+
+
+ecg_metadata_file = _latest_ecg_metadata()
 tafamidis_file = os.path.join(source_tabs, 'tafamidis_first_by_mrn.csv')
 
 # === New PyP data update (March 2026) ===

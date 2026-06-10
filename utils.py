@@ -49,6 +49,16 @@ except (ImportError, AttributeError):
 # prepare_ecg2cmr_inputs.py load order. Stored as (12, 5000) in mV already.
 _PREPROCESSED_DIR = os.path.join(_SIGNALS_BASE, 'preprocessed', 'all_ecgs')
 
+# Raw nfs signal root (Philips XML feed). The newest pdcfs1 ECGs land here under
+# numpy/pdcfs1/<yr>/<mo>/... BEFORE bb2238 consolidates them into the raid store
+# above. Searched after the store so new ECGs still render. Magnitude-normalised
+# to mV on load (same convention as the store), so it matches how the existing
+# pdcfs1 ECGs were rendered.
+try:
+    _NFS_BASE = _pc.signals
+except (NameError, AttributeError):
+    _NFS_BASE = '/mnt/nfs_yale_ecg_signals'
+
 
 # %%
 
@@ -596,17 +606,26 @@ def make_plot(fid, format_ecg, deterministic=False):
     #   2. numpy_rp/<fid>.npy               — legacy primary, (>=5000,12) uV
     #   3. numpy/<fid>.npy                  — legacy fallback, fid-prefix-dependent scale
     fid_stem = fid[:-4] if fid.lower().endswith('.dcm') else fid
-    pre_path = os.path.join(_PREPROCESSED_DIR, fid_stem + '.npy')
-    if os.path.exists(pre_path):
-        raw = np.load(pre_path, allow_pickle=True)
-        # stored (12, 5000); normalise to (5000, 12)
+
+    def _load_norm(path):
+        # store/AUMC convention: (12,5000) or (>=5000,12) -> (5000,12), uV->mV by magnitude.
+        raw = np.asarray(np.load(path, allow_pickle=True))
         if raw.shape[0] == 12 and raw.shape[1] >= 5000:
             raw = raw.T
-        proc_signal = raw[0:5000, :]
-        # already mV, but guard against a uV-scaled entry
-        if np.abs(proc_signal).max() > 50:
-            proc_signal = proc_signal / 1000.0
-    else:
+        sig = raw[0:5000, :]
+        if np.abs(sig).max() > 50:   # uV -> mV
+            sig = sig / 1000.0
+        return sig
+
+    proc_signal = None
+    # Magnitude-normalised sources: raid QC store first, then raw nfs (new pdcfs1).
+    for _base, _sub in [(_PREPROCESSED_DIR, ''), (_NFS_BASE, 'numpy_rp'), (_NFS_BASE, 'numpy')]:
+        _p = os.path.join(_base, _sub, fid_stem + '.npy')
+        if os.path.exists(_p):
+            proc_signal = _load_norm(_p)
+            break
+    if proc_signal is None:
+        # Legacy raid paths — PRESERVE original scaling (the model was trained on these).
         try:
             signal = np.load(os.path.join(_SIGNALS_BASE, 'numpy_rp', fid_stem+'.npy'), allow_pickle=True)
             proc_signal = signal[0:5000,:] / 1000
