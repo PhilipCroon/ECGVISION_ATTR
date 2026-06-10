@@ -34,10 +34,32 @@ LR_FROZEN = 1e-3
 LR_UNFROZEN = 1e-4
 
 
+# Loss selector (env-configurable so it's one knob per run; default = current wbce):
+#   LOSS=wbce  -> class-weighted binary cross-entropy (production default)
+#   LOSS=focal -> binary focal loss, FOCAL_GAMMA (default 2.0), FOCAL_ALPHA (weight on
+#                 the positive/amyloid term, default 0.75 to upweight the rare class)
+LOSS = os.getenv('LOSS', 'wbce').lower()
+FOCAL_GAMMA = float(os.getenv('FOCAL_GAMMA', '2.0'))
+FOCAL_ALPHA = float(os.getenv('FOCAL_ALPHA', '0.75'))
+
+
 def loss_fn(y_true, y_pred):
-    """Class-weighted binary cross-entropy."""
+    """Dispatch: class-weighted BCE (default) or binary focal loss (LOSS=focal).
+
+    Registered as 'loss_fn' for keras load_model(custom_objects); the dispatch is
+    internal so saved models keep loading regardless of which loss trained them.
+    """
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred, tf.float32)
+    if LOSS == 'focal':
+        eps = K.epsilon()
+        p = K.clip(y_pred, eps, 1.0 - eps)
+        ce_pos = -y_true * K.log(p)
+        ce_neg = -(1.0 - y_true) * K.log(1.0 - p)
+        fl = (FOCAL_ALPHA * K.pow(1.0 - p, FOCAL_GAMMA) * ce_pos
+              + (1.0 - FOCAL_ALPHA) * K.pow(p, FOCAL_GAMMA) * ce_neg)
+        return K.mean(fl, axis=-1)
+    # default: class-weighted binary cross-entropy
     w = CLASS_WEIGHTS
     return K.mean(
         (w[:, 1] ** (1 - y_true)) * (w[:, 0] ** (y_true))

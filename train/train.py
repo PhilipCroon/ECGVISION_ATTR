@@ -261,7 +261,8 @@ registry_row = dict(
     git_sha=GIT_SHA,
     run_tag=RUN_TAG,
     label=LABEL,
-    loss_fn='weighted_bce',
+    loss_fn=(f'focal(gamma={_model_module.FOCAL_GAMMA},alpha={_model_module.FOCAL_ALPHA})'
+             if _model_module.LOSS == 'focal' else 'weighted_bce'),
     class_weights=str(_model_module.CLASS_WEIGHTS.tolist()),
     match_ratio=getattr(project, 'MATCH_RATIO', None),
     data_key=os.path.basename(project.ecg_metadata_file),
