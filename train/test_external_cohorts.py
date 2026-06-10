@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tqdm import tqdm
-from PIL import Image
+from PIL import Image, ImageEnhance
 from pdf2image import convert_from_path
 from skimage.transform import resize as sk_resize
 from sklearn.metrics import roc_auc_score, average_precision_score
@@ -40,6 +40,13 @@ OLD_MODEL = '/home/pmc57/cmp-jdat-data/variant_amyloid/models/trained_model_Amyl
 CROP_ENABLED = os.getenv('CROP', '0') == '1'
 YOLO_WEIGHTS = os.getenv('YOLO_WEIGHTS', '')
 YOLO_CONF = float(os.getenv('YOLO_CONF', '0.8'))
+
+# Optional brightness/contrast normalization for scanned/real-world ECGs, ported from
+# upstream ecg-image-models (fix_brightness_and_contrast, used in DataSequenceTest_Adjust).
+# Scanned ECGs (e.g. SCAN-MP) are darker/lower-contrast than the clean training renders;
+# this nudges the central region to the training band (mean~0.88, std~0.10) so the model
+# can read them. ADJUST=1 applies it to ALL cohorts before resize. No retraining.
+ADJUST_ENABLED = os.getenv('ADJUST', '0') == '1'
 
 IMG_SUFFIXES = ('.png', '.jpg', '.jpeg')
 
@@ -198,9 +205,36 @@ def _raster_pil(path):
     return Image.fromarray(np.array(Image.open(path))).convert('RGB')
 
 
+def fix_brightness_and_contrast(img):
+    # Ported verbatim from upstream ecg-image-models utils_hcm.py. Iteratively enhances
+    # a grayscale image so the central [50:250,50:250] region's mean brightness lands in
+    # [0.87,0.89] and contrast (std) in [0.09,0.11], matching the training distribution.
+    pil_l = Image.fromarray(img).convert('L')
+    bright = np.mean(sk_resize(np.array(pil_l), (300, 300))[50:250, 50:250])
+    counter = 0
+    while (bright > .89 or bright < .87) and counter <= 100:
+        factor = 1.05 if bright < .87 else 0.95
+        pil_l = ImageEnhance.Brightness(pil_l).enhance(factor)
+        bright = np.mean(sk_resize(np.array(pil_l), (300, 300))[50:250, 50:250])
+        counter += 1
+    con = np.std(sk_resize(np.array(pil_l), (300, 300))[50:250, 50:250])
+    counter = 0
+    while (con > .11 or con < .09) and counter <= 100:
+        factor = 1.05 if con < .09 else 0.95
+        pil_l = ImageEnhance.Contrast(pil_l).enhance(factor)
+        con = np.std(sk_resize(np.array(pil_l), (300, 300))[50:250, 50:250])
+        counter += 1
+    return np.array(pil_l.convert('RGB'))
+
+
 def _finish(pil):
     # amyloid-service preprocessing: L->RGB->resize300, [0,1] float32.
-    return sk_resize(np.array(pil.convert('L').convert('RGB')), (300, 300)).astype(np.float32)
+    # ADJUST: normalize brightness/contrast first (scanned/real-world ECGs).
+    if ADJUST_ENABLED:
+        arr = fix_brightness_and_contrast(np.array(pil.convert('RGB')))
+    else:
+        arr = np.array(pil.convert('L').convert('RGB'))
+    return sk_resize(arr, (300, 300)).astype(np.float32)
 
 
 def make_image(path):
@@ -313,7 +347,7 @@ def main():
         sub = df[df['cohort'] == cname]
         if not len(sub):
             continue
-        suffix = '_crop' if CROP_ENABLED else ''
+        suffix = ('_crop' if CROP_ENABLED else '') + ('_adjust' if ADJUST_ENABLED else '')
         check_dir = os.path.join(project.tabs_path, f'{cname.lower()}_render_check{suffix}')
         os.makedirs(check_dir, exist_ok=True)
         for i in range(min(5, len(sub))):
@@ -351,7 +385,8 @@ def main():
                  'sens_90spec': sens, 'spec_90sens': spec}
             rows.append({'model': tag, 'cohort': name, **m})
             log_eval(path, cohort=name, metrics=m,
-                     render='deploy_yolocrop' if CROP_ENABLED else 'deploy_nocrop', level='image')
+                     render=('deploy' + ('_yolocrop' if CROP_ENABLED else '_nocrop')
+                             + ('_adjust' if ADJUST_ENABLED else '')), level='image')
         del model
         tf.keras.backend.clear_session()
 
