@@ -830,19 +830,39 @@ class DataSequenceAugRAM(tf.keras.utils.Sequence):
             k = np.outer(k, k); k /= k.sum()
             self.blur_kernel = tf.constant(
                 np.repeat(k.reshape(5, 5, 1, 1), 3, axis=2))  # (5,5,3,1)
+            # framing jitter: scanned crops vary in zoom/offset vs the training render
+            self.zoom = tf.keras.layers.RandomZoom(
+                height_factor=0.15, width_factor=0.15, fill_mode='nearest', dtype='float32')
+            self.translate = tf.keras.layers.RandomTranslation(
+                height_factor=0.08, width_factor=0.08, fill_mode='nearest', dtype='float32')
+            # faint paper-ECG gridlines (small box ~6px, big box ~30px). Grayscaled at
+            # inference, so modelled as darkening lines blended with random alpha.
+            g = np.zeros((300, 300), np.float32)
+            g[::6, :] = 0.5; g[:, ::6] = 0.5
+            g[::30, :] = 1.0; g[:, ::30] = 1.0
+            self.grid = tf.constant(g.reshape(1, 300, 300, 1))
 
     def __len__(self):
         return int(np.ceil(len(self.df) / self.batch_size))
 
     def _scan_augment(self, x):
         # x: (B,300,300,3) float32 [0,1], eager on CPU. Simulates scanned-paper ECGs.
-        x = tf.image.random_brightness(x, 0.12)
-        x = tf.image.random_contrast(x, 0.85, 1.15)
-        sigma = tf.random.uniform([], 0.0, 0.03)                    # scan grain
+        # framing jitter (zoom + offset) — crop tightness/position differs from render
+        x = self.translate(self.zoom(x, training=True), training=True)
+        # faint paper gridlines (darken lines), random strength, ~50% of batches
+        if float(tf.random.uniform([])) < 0.5:
+            alpha = tf.random.uniform([], 0.0, 0.12)
+            x = tf.clip_by_value(x - alpha * self.grid, 0.0, 1.0)
+        # photometric — wider than mild scan mode
+        x = tf.image.random_brightness(x, 0.20)
+        x = tf.image.random_contrast(x, 0.70, 1.30)
+        gamma = tf.random.uniform([], 0.8, 1.25)                    # print/exposure gamma
+        x = tf.clip_by_value(x, 1e-6, 1.0) ** gamma
+        sigma = tf.random.uniform([], 0.0, 0.06)                    # scan grain (heavier)
         x = tf.clip_by_value(x + tf.random.normal(tf.shape(x), 0.0, sigma), 0.0, 1.0)
-        if float(tf.random.uniform([])) < 0.5:                      # print/scan softening
+        if float(tf.random.uniform([])) < 0.6:                      # print/scan softening
             x = tf.nn.depthwise_conv2d(x, self.blur_kernel, [1, 1, 1, 1], 'SAME')
-        x = tf.map_fn(lambda im: tf.image.random_jpeg_quality(im, 50, 95), x)  # compression artifacts
+        x = tf.map_fn(lambda im: tf.image.random_jpeg_quality(im, 30, 90), x)  # compression artifacts
         return tf.clip_by_value(x, 0.0, 1.0)
 
     def __getitem__(self, idx):

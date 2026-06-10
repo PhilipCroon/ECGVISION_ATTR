@@ -228,6 +228,18 @@ train_sequence = DataSequenceAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LA
                                     aug_mode=AUG_MODE)
 validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
+# One-time aug preview: dump a few augmented training images so the scan aug can be
+# eyeballed before committing a full run. Should still read as a legible 12-lead.
+if AUG_MODE == 'scan':
+    import PIL.Image as _PImg
+    _prev_dir = os.path.join(project.tabs_path, 'aug_preview')
+    os.makedirs(_prev_dir, exist_ok=True)
+    _bx, _ = train_sequence[0]
+    for _i in range(min(6, len(_bx))):
+        _PImg.fromarray((np.clip(_bx[_i], 0, 1) * 255).astype(np.uint8)).save(
+            os.path.join(_prev_dir, f'aug_{_i}.png'))
+    print(f"Saved {min(6, len(_bx))} scan-aug previews -> {_prev_dir} (EYEBALL before trusting run)")
+
 # %% === Train ===
 epoch_csv = os.path.join(MODEL_DIR, f'{LABEL}_{run_id}_epochs.csv')
 
@@ -290,7 +302,7 @@ registry_row = dict(
     class_weights=str(_model_module.CLASS_WEIGHTS.tolist()),
     match_ratio=getattr(project, 'MATCH_RATIO', None),
     data_key=os.path.basename(project.ecg_metadata_file),
-    augmentation=('rotation+-10deg+scan(bright,contrast,noise,blur,jpeg)'
+    augmentation=('rotation+-10deg+scan(zoom,translate,grid,bright,contrast,gamma,noise,blur,jpeg)'
                   if AUG_MODE == 'scan' else 'rotation+-10deg'),
     batch_size=BATCH_SIZE,
     epochs_frozen=EPOCHS_FROZEN,
