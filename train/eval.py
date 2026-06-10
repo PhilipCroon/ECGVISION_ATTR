@@ -28,10 +28,13 @@ import project_constants as project
 from model import loss_fn
 
 sys.path.append(project.ecg_image_models_path)
-from utils import load_images_parallel
+from utils import load_images_parallel, save_all_images
 
 LABEL = 'amyloid'
-IMAGE_DIR = project.image_dir
+# Dedicated dir for deterministic standard-layout renders, matching
+# test_both_models.py. precomputed_images_attr holds only train+val renders,
+# so the test cohort must be rendered here ONCE before loading.
+IMAGE_DIR = project.image_dir + '_test_std'
 MODEL_DIR = os.path.join(project.project_root, 'models')
 FORMATS_FILE = project.formats_file
 
@@ -163,6 +166,13 @@ def main():
     print(f"Test ECGs: {len(cohort)} ({cohort['MRN'].nunique()} MRNs)  "
           f"pos={int(cohort[LABEL].sum())}")
     print(f"Groups: {cohort['group'].value_counts().to_dict()}")
+
+    print("Rendering test images (deterministic std layout) once...")
+    status = save_all_images(cohort, IMAGE_DIR, deterministic=True)
+    print(f"  render status: {status}")
+    assert status.get('saved', 0) + status.get('skipped', 0) > 0, (
+        f"save_all_images rendered 0 PNGs (status={status}). Signals likely not "
+        f"found — check {IMAGE_DIR} and the make_plot signal search paths.")
 
     print("Loading test images...")
     images = load_images_parallel(cohort['fileID'], IMAGE_DIR)
