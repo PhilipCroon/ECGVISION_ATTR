@@ -68,10 +68,24 @@ def _git_sha():
 GIT_SHA = _git_sha()
 RUN_TAG = os.getenv('RUN_TAG', '')   # free-text: what you changed this run, e.g. RUN_TAG="focal_loss"
 
+# SEED: set for ensemble-diverse runs. Seeds python/numpy/TF RNGs (head init, dropout,
+# aug ordering) AND the train/val split (SPLIT_STATE below) -> each member trains on a
+# different subset, bagging-style. Safe because the internal TEST is a disjoint temporal
+# holdout. Seed is appended to run_id so the 3 checkpoints don't collide.
+import random
+_seed_env = os.getenv('SEED', '')
+SEED = int(_seed_env) if _seed_env.strip() else None
+if SEED is not None:
+    random.seed(SEED)
+    np.random.seed(SEED)
+    tf.random.set_seed(SEED)
+    run_id = f"{run_id}_s{SEED}"
+    print(f"SEED={SEED} -> run_id={run_id}")
+
 # === Run registry ===
 REGISTRY_FILE = os.path.join(MODEL_DIR, 'run_registry.csv')
 REGISTRY_FIELDS = [
-    'run_id', 'date', 'git_sha', 'run_tag', 'label',
+    'run_id', 'date', 'git_sha', 'run_tag', 'seed', 'label',
     'loss_fn', 'class_weights', 'match_ratio', 'data_key', 'augmentation',
     'batch_size', 'epochs_frozen', 'epochs_unfrozen', 'val_fraction',
     'train_sequence', 'lr_frozen', 'lr_unfrozen', 'mixed_precision',
@@ -158,10 +172,16 @@ cohort['format_new'] = cohort['format_new'].fillna('full')
 cohort = cohort[(cohort['format'] == 'full') & (cohort['format_new'] == 'full')]
 cohort = cohort[cohort[LABEL].notna()].copy()
 
-# Patient-level train/val split (no MRN leakage across the split)
-gss = GroupShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=15)
+# Patient-level train/val split (no MRN leakage across the split).
+# SPLIT_STATE varies with SEED so each ensemble member trains on a different subset
+# (bagging-style -> more decorrelated members, collectively uses all the train pool).
+# Safe because the internal TEST (cohort_test.csv) is a disjoint temporal holdout, so
+# it never leaks into any member. Per-run val sets DIFFER -> judge the ensemble on the
+# held-out test/external cohorts, not on val_auroc.
+SPLIT_STATE = SEED if SEED is not None else 15
+gss = GroupShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=SPLIT_STATE)
 tr_idx, va_idx = next(gss.split(cohort, groups=cohort['MRN']))
-train_df = shuffle(cohort.iloc[tr_idx], random_state=15)
+train_df = shuffle(cohort.iloc[tr_idx], random_state=SPLIT_STATE)
 validate_df = cohort.iloc[va_idx]
 print(f"Train ECGs: {len(train_df)} ({train_df['MRN'].nunique()} MRNs)  "
       f"pos={int(train_df[LABEL].sum())}")
@@ -263,6 +283,7 @@ registry_row = dict(
     date=save_date,
     git_sha=GIT_SHA,
     run_tag=RUN_TAG,
+    seed=SEED,
     label=LABEL,
     loss_fn=(f'focal(gamma={_model_module.FOCAL_GAMMA},alpha={_model_module.FOCAL_ALPHA})'
              if _model_module.LOSS == 'focal' else 'weighted_bce'),
