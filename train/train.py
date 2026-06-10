@@ -188,11 +188,16 @@ print(f"Train ECGs: {len(train_df)} ({train_df['MRN'].nunique()} MRNs)  "
 print(f"Val   ECGs: {len(validate_df)} ({validate_df['MRN'].nunique()} MRNs)  "
       f"pos={int(validate_df[LABEL].sum())}")
 
-# Images -> RAM from PNG disk cache (fast; augmentation applied per-batch at train time)
+# Images -> RAM from PNG disk cache (fast; rotation applied per-batch at train time).
+# RERENDER (auto-on when SEED set): re-render with overwrite so each seeded run draws
+# FRESH random make_plot formats (format/color/linewidth/layout) -> the 3 ensemble
+# members see different renders = random-format augmentation across the ensemble.
+# Without it, all seeds reuse one cached render per ECG (format frozen).
+RERENDER = os.getenv('RERENDER', '0') == '1' or (SEED is not None)
 if MAKE_IMAGE:
-    print("🔁 Precomputing images...")
-    save_all_images(train_df, IMAGE_DIR)
-    save_all_images(validate_df, IMAGE_DIR)
+    print(f"🔁 Precomputing images (overwrite={RERENDER} -> fresh random-format renders)...")
+    save_all_images(train_df, IMAGE_DIR, overwrite=RERENDER)
+    save_all_images(validate_df, IMAGE_DIR, overwrite=RERENDER)
 print("Loading images from disk into RAM...")
 train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
 train_df['image_array'] = train_df['fileID'].map(train_images)
@@ -287,7 +292,7 @@ registry_row = dict(
     class_weights=str(_model_module.CLASS_WEIGHTS.tolist()),
     match_ratio=getattr(project, 'MATCH_RATIO', None),
     data_key=os.path.basename(project.ecg_metadata_file),
-    augmentation='rotation+-10deg',
+    augmentation='rotation+-10deg+randomformat' + ('(fresh-per-run)' if RERENDER else '(cached)'),
     batch_size=BATCH_SIZE,
     epochs_frozen=EPOCHS_FROZEN,
     epochs_unfrozen=EPOCHS,
