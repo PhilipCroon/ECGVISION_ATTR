@@ -70,6 +70,10 @@ GREECE = {
 # statuses not in the map -> dropped.
 SCAN_MP = {
     'pdf_dir':     '/home/pmc57/projects/multimodal_amyloid/scan_mp/scanmp_ecg_pdf_cleaned',
+    # Pre-cropped PNGs from crop_pdfs.py (torch-only env). If this dir exists it is
+    # used INSTEAD of pdf_dir -> score with CROP off (already cropped). Same filename
+    # stems, so the id-<studyid> label join is unchanged.
+    'img_dir':     '/home/pmc57/projects/multimodal_amyloid/scan_mp/scanmp_ecg_png_cropped',
     'labels_xlsx': '/home/pmc57/projects/multimodal_amyloid/scan_mp/SCAN-MP_labels.xlsx',
 }
 PYP_STATUS_MAP = {
@@ -152,17 +156,23 @@ def _scanmp_frame(cfg):
         except (ValueError, IndexError):
             return None
 
-    pdfs = sorted(os.path.join(r, f)
-                  for r, _, files in os.walk(cfg['pdf_dir'])
-                  for f in files if f.lower().endswith('.pdf'))
+    # Prefer pre-cropped PNGs (crop_pdfs.py output) if that dir exists; else raw PDFs.
+    img_dir = cfg.get('img_dir')
+    if img_dir and os.path.isdir(img_dir):
+        src_dir, sfx, kind = img_dir, IMG_SUFFIXES, 'pre-cropped PNGs'
+    else:
+        src_dir, sfx, kind = cfg['pdf_dir'], ('.pdf',), 'PDFs (no crop)'
+    files = sorted(os.path.join(r, f)
+                   for r, _, fs in os.walk(src_dir)
+                   for f in fs if f.lower().endswith(sfx))
     recs = []
-    for p in pdfs:
+    for p in files:
         sid = studyid(os.path.splitext(os.path.basename(p))[0])
         recs.append({'cohort': 'SCAN_MP', 'label': label_map.get(sid), 'path': p})
     df = pd.DataFrame(recs)
     matched = df['label'].notna().sum()
-    print(f"SCAN_MP   {len(pdfs)} PDFs, matched {matched} to labels "
-          f"({len(df) - matched} unmatched -> dropped)  ({cfg['pdf_dir']})")
+    print(f"SCAN_MP   {len(files)} {kind}, matched {matched} to labels "
+          f"({len(df) - matched} unmatched -> dropped)  ({src_dir})")
     return df[df['label'].notna()].assign(label=lambda d: d['label'].astype(int))
 
 
@@ -259,10 +269,10 @@ def main():
         frames.append(_greece_frame(GREECE))
     else:
         print(f"Greece    skipped — PDF dir not found ({GREECE['pdf_dir']})")
-    if os.path.isdir(SCAN_MP['pdf_dir']):
+    if os.path.isdir(SCAN_MP['pdf_dir']) or os.path.isdir(SCAN_MP.get('img_dir', '')):
         frames.append(_scanmp_frame(SCAN_MP))
     else:
-        print(f"SCAN_MP   skipped — PDF dir not found ({SCAN_MP['pdf_dir']})")
+        print(f"SCAN_MP   skipped — no PDF/img dir ({SCAN_MP['pdf_dir']})")
     df = pd.concat(frames, ignore_index=True)
     if len(df) == 0:
         print("No images found — check the cohort paths.")
