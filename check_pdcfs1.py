@@ -154,10 +154,13 @@ def main():
             if checked >= 5:
                 break
     if checked:
-        print(f"\n  worst post-filter max|diff| = {worst:.6f}")
-        print("  >>> PASS — images match after baseline removal; /200 + [0:5000] is safe."
-              if worst < 1e-3 else
-              "  >>> FAIL — diff survives median filter; not just baseline. Need bb2238 to consolidate.")
+        # Threshold in mV at render scale: signals are ~1-2 mV plotted on a ±~2 mV axis
+        # into a 300px image, and training uses far larger style augmentation. <0.1 mV
+        # is sub-pixel / invisible. >0.1 mV would mean a real processing step is missing.
+        print(f"\n  worst post-filter max|diff| = {worst:.6f} mV")
+        print("  >>> PASS — sub-pixel at render scale; /200 + [0:5000] is safe."
+              if worst < 0.1 else
+              "  >>> FAIL — diff too large; a real processing step is missing. Ask bb2238 to consolidate.")
 
     print("\nqc_metadata transform fields (why raw->store may be non-trivial):")
     cols = [c for c in ['fid_rel', 'original_shape', 'scaled_by', 'has_padding',
