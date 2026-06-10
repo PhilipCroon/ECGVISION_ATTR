@@ -36,7 +36,7 @@ MODEL_DIR = os.path.join(project.project_root, 'models')
 
 # --- the two models to compare (baked in) ---
 NEW_MODEL = os.path.join(MODEL_DIR, 'attr_amyloid_2026_06_05_unfrozen_06')
-OLD_MODEL = '/home/pmc57/projects/multimodal_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
+OLD_MODEL = '/home/pmc57/cmp-jdat-data/variant_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
 
 # Dedicated dir for deterministic standard-layout renders — kept separate from the
 # random-style training PNGs so caching works and there's no collision.
