@@ -27,6 +27,7 @@ import project_constants as project
 from model import loss_fn
 from eval import (load_test_cohort, sensitivity_at_specificity,
                   specificity_at_sensitivity)
+from eval_log import log_eval
 
 sys.path.append(project.ecg_image_models_path)
 from utils import load_images_parallel, save_all_images
@@ -118,6 +119,9 @@ def main():
         rows.append({'tag': tag, 'model': name, 'n_patients': len(pat),
                      'pos': int(y.sum()), 'auroc': auroc, 'auprc': auprc,
                      'sens_90spec': sens, 'spec_90sens': spec})
+        log_eval(path, cohort='internal_test', render='make_plot_std', level='patient',
+                 metrics={'n': len(pat), 'pos': int(y.sum()), 'auroc': auroc, 'auprc': auprc,
+                          'sens_90spec': sens, 'spec_90sens': spec})
         del model
         tf.keras.backend.clear_session()
 

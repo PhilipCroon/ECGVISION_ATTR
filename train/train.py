@@ -52,15 +52,32 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 save_date = datetime.today().strftime('%Y_%m_%d')
 run_id = datetime.today().strftime('%Y%m%d_%H%M%S')
 
+
+def _git_sha():
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return 'unknown'
+
+
+GIT_SHA = _git_sha()
+RUN_TAG = os.getenv('RUN_TAG', '')   # free-text: what you changed this run, e.g. RUN_TAG="focal_loss"
+
 # === Run registry ===
 REGISTRY_FILE = os.path.join(MODEL_DIR, 'run_registry.csv')
 REGISTRY_FIELDS = [
-    'run_id', 'date', 'label', 'batch_size', 'epochs_frozen', 'epochs_unfrozen',
-    'val_fraction', 'train_sequence', 'lr_frozen', 'lr_unfrozen',
-    'class_weights', 'augmentation', 'mixed_precision',
+    'run_id', 'date', 'git_sha', 'run_tag', 'label',
+    'loss_fn', 'class_weights', 'match_ratio', 'data_key', 'augmentation',
+    'batch_size', 'epochs_frozen', 'epochs_unfrozen', 'val_fraction',
+    'train_sequence', 'lr_frozen', 'lr_unfrozen', 'mixed_precision',
     'n_train', 'n_val', 'n_train_pos', 'n_val_pos',
+    'n_train_indiv', 'n_val_indiv', 'n_train_pos_indiv', 'n_val_pos_indiv',
     'best_val_auroc_frozen', 'best_val_auroc_unfrozen', 'best_epoch_unfrozen',
-    'epoch_csv',
+    'best_ckpt', 'epoch_csv',
 ]
 
 def _write_registry(row: dict):
@@ -74,9 +91,10 @@ def _write_registry(row: dict):
 
 class RegistryCallback(tf.keras.callbacks.Callback):
     """Writes best val_auroc to run_registry.csv at end of phase 2."""
-    def __init__(self, registry_row: dict):
+    def __init__(self, registry_row: dict, ckpt_template: str = None):
         super().__init__()
         self.registry_row = registry_row
+        self.ckpt_template = ckpt_template   # e.g. ".../attr_amyloid_<run_id>_unfrozen_{epoch:02d}"
         self.best_val_auroc = -np.inf
         self.best_epoch = -1
 
@@ -89,6 +107,9 @@ class RegistryCallback(tf.keras.callbacks.Callback):
     def on_train_end(self, logs=None):
         self.registry_row['best_val_auroc_unfrozen'] = round(self.best_val_auroc, 5)
         self.registry_row['best_epoch_unfrozen'] = self.best_epoch
+        if self.ckpt_template and self.best_epoch > 0:
+            self.registry_row['best_ckpt'] = os.path.basename(
+                self.ckpt_template.format(epoch=self.best_epoch))
         _write_registry(self.registry_row)
         print(f"\nRun registry updated: {REGISTRY_FILE}")
         print(f"  run_id={self.registry_row['run_id']}  "
@@ -186,7 +207,7 @@ validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, lab
 # %% === Train ===
 epoch_csv = os.path.join(MODEL_DIR, f'{LABEL}_{run_id}_epochs.csv')
 
-frozen_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_frozen' + '_{epoch:02d}')
+frozen_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{run_id}_frozen' + '_{epoch:02d}')
 checkpoint = ModelCheckpoint(frozen_model_file, monitor='val_auroc', mode='max',
                              save_best_only=True, verbose=1)
 csv_logger = CSVLogger(epoch_csv, append=True, separator=';')
@@ -225,7 +246,7 @@ best_val_auroc_frozen = max(history_frozen.history.get('val_auroc', [-1]))
 with strategy.scope():
     unfreeze_model(model_cnn)
 
-saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{save_date}_unfrozen' + '_{epoch:02d}')
+saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{run_id}_unfrozen' + '_{epoch:02d}')
 checkpoint = ModelCheckpoint(saved_model_file, monitor='val_auroc', mode='max',
                              save_best_only=True, verbose=1)
 early_stop = EarlyStopping(monitor='val_auroc', patience=5, mode='max', verbose=1)
@@ -233,7 +254,14 @@ early_stop = EarlyStopping(monitor='val_auroc', patience=5, mode='max', verbose=
 registry_row = dict(
     run_id=run_id,
     date=save_date,
+    git_sha=GIT_SHA,
+    run_tag=RUN_TAG,
     label=LABEL,
+    loss_fn='weighted_bce',
+    class_weights=str(_model_module.CLASS_WEIGHTS.tolist()),
+    match_ratio=getattr(project, 'MATCH_RATIO', None),
+    data_key=os.path.basename(project.ecg_metadata_file),
+    augmentation='rotation+-10deg',
     batch_size=BATCH_SIZE,
     epochs_frozen=EPOCHS_FROZEN,
     epochs_unfrozen=EPOCHS,
@@ -241,19 +269,22 @@ registry_row = dict(
     train_sequence='DataSequenceAugRAM',
     lr_frozen=1e-3,
     lr_unfrozen='ExponentialDecay(2e-5,steps=1000,rate=0.96)',
-    class_weights='[1.3,0.77]',
-    augmentation='rotation+-10deg',
     mixed_precision='mixed_bfloat16',
     n_train=len(train_df),
     n_val=len(validate_df),
     n_train_pos=int(train_df[LABEL].sum()),
     n_val_pos=int(validate_df[LABEL].sum()),
+    n_train_indiv=int(train_df['MRN'].nunique()),
+    n_val_indiv=int(validate_df['MRN'].nunique()),
+    n_train_pos_indiv=int(train_df[train_df[LABEL] == 1]['MRN'].nunique()),
+    n_val_pos_indiv=int(validate_df[validate_df[LABEL] == 1]['MRN'].nunique()),
     best_val_auroc_frozen=round(best_val_auroc_frozen, 5),
     best_val_auroc_unfrozen=None,
     best_epoch_unfrozen=None,
+    best_ckpt=None,
     epoch_csv=os.path.basename(epoch_csv),
 )
-registry_cb = RegistryCallback(registry_row)
+registry_cb = RegistryCallback(registry_row, ckpt_template=saved_model_file)
 
 fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(),
                            early_stop, registry_cb]

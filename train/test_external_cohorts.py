@@ -24,6 +24,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import project_constants as project
 from model import loss_fn
 from eval import sensitivity_at_specificity, specificity_at_sensitivity
+from eval_log import log_eval
 
 MODEL_DIR = os.path.join(project.project_root, 'models')
 NEW_MODEL = os.path.join(MODEL_DIR, 'attr_amyloid_2026_06_05_unfrozen_06')
@@ -120,8 +121,10 @@ def main():
             spec, _ = specificity_at_sensitivity(y, s, 0.90)
             print(f"  {name:10s} n={len(g):4d} pos={int(y.sum()):4d} "
                   f"AUROC={auroc:.4f} AUPRC={auprc:.4f} Sens@90spec={sens:.4f} Spec@90sens={spec:.4f}")
-            rows.append({'model': tag, 'cohort': name, 'n': len(g), 'pos': int(y.sum()),
-                         'auroc': auroc, 'auprc': auprc, 'sens_90spec': sens, 'spec_90sens': spec})
+            m = {'n': len(g), 'pos': int(y.sum()), 'auroc': auroc, 'auprc': auprc,
+                 'sens_90spec': sens, 'spec_90sens': spec}
+            rows.append({'model': tag, 'cohort': name, **m})
+            log_eval(path, cohort=name, metrics=m, render='deploy_image', level='image')
         del model
         tf.keras.backend.clear_session()
 
