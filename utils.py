@@ -607,30 +607,33 @@ def make_plot(fid, format_ecg, deterministic=False):
     #   3. numpy/<fid>.npy                  — legacy fallback, fid-prefix-dependent scale
     fid_stem = fid[:-4] if fid.lower().endswith('.dcm') else fid
 
-    def _load_norm(path):
-        # store/AUMC convention: (12,5000) or (>=5000,12) -> (5000,12), uV->mV by magnitude.
-        raw = np.asarray(np.load(path, allow_pickle=True))
+    def _first(bases, sub):
+        for b in bases:
+            p = os.path.join(b, sub, fid_stem + '.npy')
+            if os.path.exists(p):
+                return p
+        return None
+
+    # 1. raid QC store: already (5000,12)/(12,5000) mV (scaled+unpadded). Orient only,
+    #    do NOT rescale. Verified: store == raw/200 for pdcfs1 (qc_metadata scaled_by=200).
+    store_p = os.path.join(_PREPROCESSED_DIR, fid_stem + '.npy')
+    if os.path.exists(store_p):
+        raw = np.asarray(np.load(store_p, allow_pickle=True))
         if raw.shape[0] == 12 and raw.shape[1] >= 5000:
             raw = raw.T
-        sig = raw[0:5000, :]
-        if np.abs(sig).max() > 50:   # uV -> mV
-            sig = sig / 1000.0
-        return sig
-
-    proc_signal = None
-    # Magnitude-normalised sources: raid QC store first, then raw nfs (new pdcfs1).
-    for _base, _sub in [(_PREPROCESSED_DIR, ''), (_NFS_BASE, 'numpy_rp'), (_NFS_BASE, 'numpy')]:
-        _p = os.path.join(_base, _sub, fid_stem + '.npy')
-        if os.path.exists(_p):
-            proc_signal = _load_norm(_p)
-            break
-    if proc_signal is None:
-        # Legacy raid paths — PRESERVE original scaling (the model was trained on these).
-        try:
-            signal = np.load(os.path.join(_SIGNALS_BASE, 'numpy_rp', fid_stem+'.npy'), allow_pickle=True)
+        proc_signal = raw[0:5000, :]
+    else:
+        # 2. Raw stores — original per-source scaling. Search raid first, then nfs
+        #    (new pdcfs1 lands on nfs numpy/ before bb2238 consolidates to the store).
+        #    numpy_rp = uV -> /1000;  numpy = fid-prefix scale (pdcfs1 'p' -> /200,
+        #    matching the store's scaled_by=200). PRESERVED from the original loader.
+        rp = _first([_SIGNALS_BASE, _NFS_BASE], 'numpy_rp')
+        if rp is not None:
+            signal = np.load(rp, allow_pickle=True)
             proc_signal = signal[0:5000,:] / 1000
-        except:
-            signal = np.array(np.load(os.path.join(_SIGNALS_BASE, 'numpy', fid_stem+'.npy'), allow_pickle=True))
+        else:
+            np_path = _first([_SIGNALS_BASE, _NFS_BASE], 'numpy')
+            signal = np.array(np.load(np_path, allow_pickle=True))
             signal = signal.T
             if fid_stem[0]=='2':
                 signal = signal.T

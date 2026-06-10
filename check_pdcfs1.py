@@ -35,15 +35,20 @@ def build_fid(fb):
     return f"pdcfs1/{full[:4]}/{full[6:]}/{fb}"
 
 
-# --- mirror of utils.make_plot._load_norm (KEEP IN SYNC) ---
-def load_norm(path):
+# --- mirror of utils.make_plot loader (KEEP IN SYNC) ---
+def load_store(path):
+    # raid QC store: already mV, orient only.
     raw = np.asarray(np.load(path, allow_pickle=True))
     if raw.shape[0] == 12 and raw.shape[1] >= 5000:
         raw = raw.T
-    sig = raw[0:5000, :]
-    if np.abs(sig).max() > 50:
-        sig = sig / 1000.0
-    return sig
+    return raw[0:5000, :]
+
+
+def load_raw_pdcfs1(path):
+    # raw nfs numpy/ for a pdcfs1 fid ('p' prefix): transpose, /200, take 5000.
+    signal = np.array(np.load(path, allow_pickle=True))
+    signal = signal.T
+    return signal[0:5000, :] / 200
 
 
 def main():
@@ -83,7 +88,7 @@ def main():
         sp = os.path.join(STORE, fr + '.npy')
         rp = os.path.join(NFS, 'numpy', fr + '.npy')
         if os.path.exists(sp) and os.path.exists(rp):
-            s, r = load_norm(sp), load_norm(rp)
+            s, r = load_store(sp), load_raw_pdcfs1(rp)
             if s.shape != r.shape:
                 print(f"  SHAPE MISMATCH {fr}: store={s.shape} raw={r.shape}")
             else:
