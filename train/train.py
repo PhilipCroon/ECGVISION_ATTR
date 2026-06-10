@@ -193,9 +193,12 @@ csv_logger = CSVLogger(epoch_csv, append=True, separator=';')
 early_stop_frozen = EarlyStopping(monitor='val_auroc', patience=2, mode='max', verbose=1)
 
 # MirroredStrategy for multi-GPU; fall back to default for single GPU
-# (MirroredStrategy triggers NCCL init even on 1 GPU, which can crash on some H100 configs)
+# (MirroredStrategy triggers NCCL init even on 1 GPU, which can crash on some H100 configs).
+# Use HierarchicalCopyAllReduce instead of the default NCCL all-reduce: NCCL fails with
+# "unhandled system error / Adam/NcclAllReduce" on this box's 2-GPU setup.
 if len(gpus) > 1:
-    strategy = tf.distribute.MirroredStrategy()
+    strategy = tf.distribute.MirroredStrategy(
+        cross_device_ops=tf.distribute.HierarchicalCopyAllReduce())
 else:
     strategy = tf.distribute.get_strategy()  # default single-device strategy
 print(f"Training on {strategy.num_replicas_in_sync} GPU(s)")
