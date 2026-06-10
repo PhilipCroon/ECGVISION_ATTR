@@ -56,6 +56,21 @@ GREECE = {
     'labels_csv': '/mnt/nfs_yale_ecg/amyloid/Greece_Dems.csv',
 }
 
+# SCAN-MP: same PDF/no-crop pattern as Greece, different label source. Labels in an
+# xlsx keyed by 'study ID'; PDFs named 'id-<studyid>_...'. PyP status -> binary via
+# PYP_STATUS_MAP (ported from multimodal_amyloid SCAN_MP_sensitivity_analysis.py);
+# statuses not in the map -> dropped.
+SCAN_MP = {
+    'pdf_dir':     '/home/pmc57/projects/multimodal_amyloid/scan_mp/scanmp_ecg_pdf_cleaned',
+    'labels_xlsx': '/home/pmc57/projects/multimodal_amyloid/scan_mp/SCAN-MP_labels.xlsx',
+}
+PYP_STATUS_MAP = {
+    "Strongly suggestive of ATTR": 1,
+    "Equivocal for ATTR / Possible early ATTR": 0,
+    "ATTR by EMB": 1,
+    "Not suggestive of ATTR": 0,
+}
+
 
 # ---- Greece patient-id + label helpers (ported from multimodal_amyloid run_models_ext.py) ----
 def _normalize_patient_id(value):
@@ -114,6 +129,35 @@ def _greece_frame(cfg):
     return df[df['label'].notna()].assign(label=lambda d: d['label'].astype(int))
 
 
+def _scanmp_frame(cfg):
+    """Build a (cohort,label,path) frame for SCAN-MP. PDFs named 'id-<studyid>_...';
+    label from the xlsx 'study ID' -> 'Amyloid_status_by_PYP' via PYP_STATUS_MAP."""
+    lab = pd.read_excel(cfg['labels_xlsx']).rename(
+        columns={"study ID": "StudyID", "Amyloid_status_by_PYP": "PyP_status"})
+    lab["Amyloid"] = lab["PyP_status"].map(PYP_STATUS_MAP)
+    lab = lab.dropna(subset=["Amyloid"])
+    label_map = {int(sid): int(a) for sid, a in zip(lab["StudyID"], lab["Amyloid"])}
+
+    def studyid(stem):
+        try:
+            return int(stem.split("_")[0].replace("id-", ""))
+        except (ValueError, IndexError):
+            return None
+
+    pdfs = sorted(os.path.join(r, f)
+                  for r, _, files in os.walk(cfg['pdf_dir'])
+                  for f in files if f.lower().endswith('.pdf'))
+    recs = []
+    for p in pdfs:
+        sid = studyid(os.path.splitext(os.path.basename(p))[0])
+        recs.append({'cohort': 'SCAN_MP', 'label': label_map.get(sid), 'path': p})
+    df = pd.DataFrame(recs)
+    matched = df['label'].notna().sum()
+    print(f"SCAN_MP   {len(pdfs)} PDFs, matched {matched} to labels "
+          f"({len(df) - matched} unmatched -> dropped)  ({cfg['pdf_dir']})")
+    return df[df['label'].notna()].assign(label=lambda d: d['label'].astype(int))
+
+
 def list_images(folder):
     out = []
     if not os.path.isdir(folder):
@@ -162,6 +206,10 @@ def main():
         frames.append(_greece_frame(GREECE))
     else:
         print(f"Greece    skipped — PDF dir not found ({GREECE['pdf_dir']})")
+    if os.path.isdir(SCAN_MP['pdf_dir']):
+        frames.append(_scanmp_frame(SCAN_MP))
+    else:
+        print(f"SCAN_MP   skipped — PDF dir not found ({SCAN_MP['pdf_dir']})")
     df = pd.concat(frames, ignore_index=True)
     if len(df) == 0:
         print("No images found — check the cohort paths.")
@@ -178,17 +226,19 @@ def main():
     X = np.stack(df['img'].values).astype(np.float32)
     print(f"loaded {len(df)} images")
 
-    # Eyeball backstop for the unvalidated PDF path: dump a few Greece renders.
-    # If the ECG isn't a tight 12-lead plot filling the 300x300 frame, the no-crop
-    # preprocessing is off and Greece AUROCs are meaningless — check before trusting.
-    g = df[df['cohort'] == 'Greece']
-    if len(g):
-        check_dir = os.path.join(project.tabs_path, 'greece_render_check')
+    # Eyeball backstop for the unvalidated no-crop PDF path (Greece, SCAN_MP): dump a
+    # few renders per cohort. If the ECG isn't a tight 12-lead plot filling the 300x300
+    # frame, the no-crop preprocessing is off and those AUROCs are meaningless.
+    for cname in ('Greece', 'SCAN_MP'):
+        sub = df[df['cohort'] == cname]
+        if not len(sub):
+            continue
+        check_dir = os.path.join(project.tabs_path, f'{cname.lower()}_render_check')
         os.makedirs(check_dir, exist_ok=True)
-        for i in range(min(5, len(g))):
-            Image.fromarray((g['img'].iloc[i] * 255).astype(np.uint8)).save(
-                os.path.join(check_dir, f"sample_{i}_label{g['label'].iloc[i]}.png"))
-        print(f"Saved {min(5, len(g))} Greece render samples -> {check_dir} (EYEBALL THESE)")
+        for i in range(min(5, len(sub))):
+            Image.fromarray((sub['img'].iloc[i] * 255).astype(np.uint8)).save(
+                os.path.join(check_dir, f"sample_{i}_label{sub['label'].iloc[i]}.png"))
+        print(f"Saved {min(5, len(sub))} {cname} render samples -> {check_dir} (EYEBALL THESE)")
 
     gpus = tf.config.list_physical_devices('GPU')
     for g in gpus:
