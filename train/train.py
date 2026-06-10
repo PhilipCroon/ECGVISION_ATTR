@@ -163,6 +163,19 @@ validate_df['image_array'] = validate_df['fileID'].map(val_images)
 validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
 assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
 
+# --- actual usable data after rendering/loading (images, not just rows) ---
+def _summarize(df, name):
+    is_case = df[LABEL] == 1
+    cases, controls = df[is_case], df[~is_case]
+    print(f"[{name}] images: {len(df)}  individuals: {df['MRN'].nunique()}")
+    print(f"    cases    -> images: {len(cases):6d}  individuals: {cases['MRN'].nunique()}")
+    print(f"    controls -> images: {len(controls):6d}  individuals: {controls['MRN'].nunique()}")
+
+print("\n=== Actual training data (images successfully rendered + loaded) ===")
+_summarize(train_df, "TRAIN")
+_summarize(validate_df, "VAL")
+print("=" * 64 + "\n")
+
 # Mild class weights — cohort is already 1:10 matched, so imbalance is handled at data level
 _model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
 print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
