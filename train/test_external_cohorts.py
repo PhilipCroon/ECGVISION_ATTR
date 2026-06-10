@@ -103,15 +103,17 @@ def main():
     tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
 
     rows = []
+    pred_tags = []
     for tag, path in [('NEW', NEW_MODEL), ('OLD', OLD_MODEL)]:
         if not os.path.exists(path):
             print(f"{tag} MISSING: {path}")
             continue
         print(f"\n=== {tag}: {os.path.basename(path)} ===")
         model = tf.keras.models.load_model(path, custom_objects={'loss_fn': loss_fn})
-        df['pred'] = predict(model, X)
+        df[f'pred_{tag}'] = predict(model, X)
+        pred_tags.append(tag)
         for name, g in df.groupby('cohort'):
-            y, s = g['label'].values, g['pred'].values
+            y, s = g['label'].values, g[f'pred_{tag}'].values
             if len(np.unique(y)) < 2:
                 print(f"  {name}: only one class, skipping AUROC")
                 continue
@@ -135,6 +137,12 @@ def main():
     print(out.to_string(index=False))
     p = os.path.join(project.tabs_path, 'external_cohort_comparison.csv')
     out.to_csv(p, index=False)
+
+    # Per-sample predictions for bootstrap CIs (bootstrap_ci.py).
+    keep = ['cohort', 'label', 'path'] + [f'pred_{t}' for t in pred_tags]
+    preds_path = os.path.join(project.tabs_path, 'external_preds.csv')
+    df[keep].to_csv(preds_path, index=False)
+    print(f"Saved per-sample predictions: {preds_path}")
     print(f"\nSaved: {p}")
 
 
