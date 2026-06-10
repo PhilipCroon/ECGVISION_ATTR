@@ -128,9 +128,36 @@ def main():
         for m, k in ranked:
             print(f"    {k:18s} mean max|diff|={m:.6f}")
         best_m, best_k = ranked[0]
-        print(f"\n  >>> BEST: {best_k}  (mean {best_m:.6f})")
-        print("  >>> PASS — wire this into make_plot" if best_m < 1e-3 else
-              "  >>> still FAIL — none match; raw->store may also resample/filter differently.")
+        print(f"\n  raw-signal BEST: {best_k}  (mean {best_m:.6f}) — likely baseline-wander residual")
+
+    # DECISIVE: make_plot removes baseline via median_filter(500). The model sees the
+    # POST-filter signal, not the raw. Compare store vs raw[0:5000]/200 AFTER that filter.
+    print("\n" + "=" * 60 + "\nBLOCKER 2b: AFTER make_plot baseline removal (what the model sees)\n" + "=" * 60)
+    from scipy.ndimage import median_filter as _mf
+
+    def mp(sig):  # mirror make_plot: proc - median_filter(proc, (500,1))
+        return sig - _mf(sig, size=(500, 1))
+
+    checked = 0
+    worst = 0.0
+    for fr in pdc['fid_rel']:
+        sp = os.path.join(STORE, fr + '.npy')
+        rp = os.path.join(NFS, 'numpy', fr + '.npy')
+        if os.path.exists(sp) and os.path.exists(rp):
+            s = load_store(sp)
+            r = load_raw_pdcfs1(rp)          # raw.T[0:5000]/200
+            if s.shape == r.shape:
+                d = float(np.abs(mp(s) - mp(r)).max())
+                worst = max(worst, d)
+                print(f"  {fr}  post-filter max|diff|={d:.6f}")
+            checked += 1
+            if checked >= 5:
+                break
+    if checked:
+        print(f"\n  worst post-filter max|diff| = {worst:.6f}")
+        print("  >>> PASS — images match after baseline removal; /200 + [0:5000] is safe."
+              if worst < 1e-3 else
+              "  >>> FAIL — diff survives median filter; not just baseline. Need bb2238 to consolidate.")
 
     print("\nqc_metadata transform fields (why raw->store may be non-trivial):")
     cols = [c for c in ['fid_rel', 'original_shape', 'scaled_by', 'has_padding',
