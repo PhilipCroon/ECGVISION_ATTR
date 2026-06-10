@@ -920,6 +920,100 @@ def save_image_from_row(row, output_dir, overwrite=False, deterministic=False):
         return 'error'
 
 
+def save_image_variants_from_row(args):
+    # Render up to n_variants random-format PNGs for one ECG: <stem>_v{k}.png.
+    # make_plot(deterministic=False) picks a fresh random format/color/linewidth each call.
+    row, output_dir, n_variants, overwrite = args
+    fid = row['fileID']
+    fmt = row.get('format_new', None)
+    stem = fid.split("/")[-1]
+    saved = 0
+    for k in range(n_variants):
+        out_path = os.path.join(output_dir, f"{stem}_v{k}.png")
+        if os.path.exists(out_path) and not overwrite:
+            continue
+        try:
+            img = make_plot(fid, fmt, deterministic=False)
+            Image.fromarray(img).convert('RGB').resize((300, 300)).save(out_path, format='PNG')
+            saved += 1
+        except Exception as e:
+            print(f"Failed {fid} v{k}: {e}")
+    return saved
+
+
+def save_all_images_multi(df, output_dir, n_variants=4, num_workers=None, overwrite=False):
+    """Render n_variants random-format PNGs per ECG (<stem>_v{k}.png), once. Pair with
+    DataSequenceMultiAugRAM, which samples one variant per epoch for format augmentation
+    without per-epoch rendering."""
+    os.makedirs(output_dir, exist_ok=True)
+    if num_workers is None:
+        num_workers = max(1, cpu_count() - 1)
+    print(f"number of workers = {num_workers}, n_variants={n_variants} (overwrite={overwrite})")
+    args = [(r, output_dir, n_variants, overwrite) for r in df.to_dict('records')]
+    total = 0
+    with Pool(num_workers) as pool:
+        for s in tqdm(pool.imap(save_image_variants_from_row, args),
+                      total=len(args), desc="Saving ECG variants"):
+            total += s
+    print(f"  rendered {total} new variant PNGs")
+    return total
+
+
+def _load_variants(args):
+    fid, image_dir, n_variants = args
+    stem = os.path.basename(fid)
+    out = []
+    for k in range(n_variants):
+        p = os.path.join(image_dir, f"{stem}_v{k}.png")
+        if os.path.exists(p):
+            try:
+                out.append(np.asarray(
+                    Image.open(p).convert('RGB').resize((300, 300)), dtype=np.uint8))
+            except Exception:
+                pass
+    return out
+
+
+class DataSequenceMultiAugRAM(tf.keras.utils.Sequence):
+    """Loads N random-format variants per ECG into RAM (uint8 -> RAM-neutral vs one
+    float render) and samples one variant per sample each __getitem__, then applies
+    ±max_angle rotation. Fresh sampling each epoch = random-format augmentation with no
+    per-epoch rendering. Expects <stem>_v{k}.png from save_all_images_multi."""
+    def __init__(self, df, batch_size, label, image_dir, n_variants=4, max_angle=10,
+                 num_workers=None):
+        self.df = df.reset_index(drop=True)
+        self.batch_size = batch_size
+        self.n_variants = n_variants
+        fids = self.df['fileID'].tolist()
+        if num_workers is None:
+            num_workers = max(1, cpu_count() - 1)
+        with Pool(num_workers) as pool:
+            variants = list(tqdm(
+                pool.imap(_load_variants, [(f, image_dir, n_variants) for f in fids]),
+                total=len(fids), desc="Loading format variants"))
+        keep = [i for i, v in enumerate(variants) if len(v) > 0]
+        if len(keep) < len(variants):
+            print(f"[multi-aug] dropped {len(variants) - len(keep)} samples with no rendered variant")
+        self.df = self.df.iloc[keep].reset_index(drop=True)
+        self.variants = [variants[i] for i in keep]
+        self.labels = self.df[[label]].values.astype(np.float32)
+        self.aug = tf.keras.layers.RandomRotation(
+            factor=max_angle / 360.0, fill_mode='nearest', seed=None, dtype='float32')
+
+    def __len__(self):
+        return int(np.ceil(len(self.df) / self.batch_size))
+
+    def __getitem__(self, idx):
+        sl = slice(idx * self.batch_size, (idx + 1) * self.batch_size)
+        vs = self.variants[sl]
+        batch_x = np.stack([v[np.random.randint(len(v))].astype(np.float32) / 255.0 for v in vs])
+        batch_y = self.labels[sl]
+        # rotation on CPU so it doesn't contend with the GPU training stream
+        with tf.device('/CPU:0'):
+            batch_x = self.aug(batch_x, training=True).numpy()
+        return batch_x.astype(np.float32), batch_y
+
+
 def load_image_from_disk(fid, image_dir):
     filename = os.path.basename(fid)
     path = os.path.join(image_dir, f"{filename}.png")

@@ -189,26 +189,43 @@ print(f"Val   ECGs: {len(validate_df)} ({validate_df['MRN'].nunique()} MRNs)  "
       f"pos={int(validate_df[LABEL].sum())}")
 
 # Images -> RAM from PNG disk cache (fast; rotation applied per-batch at train time).
-# RERENDER (auto-on when SEED set): re-render with overwrite so each seeded run draws
-# FRESH random make_plot formats (format/color/linewidth/layout) -> the 3 ensemble
-# members see different renders = random-format augmentation across the ensemble.
-# Without it, all seeds reuse one cached render per ECG (format frozen).
-RERENDER = os.getenv('RERENDER', '0') == '1' or (SEED is not None)
+# NFORMATS>1: precompute N random-format variants per ECG ONCE, then sample one per
+# epoch (DataSequenceMultiAugRAM) -> prod-style random-format augmentation WITHOUT the
+# slow per-run re-render. Variants are shared across seeds (cached); per-epoch + per-seed
+# sampling gives the diversity. NFORMATS=1 keeps the original single-render path.
+# RERENDER=1 forces overwrite of the cache (e.g. after a make_plot change).
+RERENDER = os.getenv('RERENDER', '0') == '1'
+NFORMATS = int(os.getenv('NFORMATS', '1'))
 if MAKE_IMAGE:
-    print(f"🔁 Precomputing images (overwrite={RERENDER} -> fresh random-format renders)...")
-    save_all_images(train_df, IMAGE_DIR, overwrite=RERENDER)
-    save_all_images(validate_df, IMAGE_DIR, overwrite=RERENDER)
-print("Loading images from disk into RAM...")
-train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
-train_df['image_array'] = train_df['fileID'].map(train_images)
-train_df = train_df[train_df['image_array'].notna()].reset_index(drop=True)
-assert len(train_df) > 0, (
-    f"No images loaded from {IMAGE_DIR}. Set MAKE_IMAGE=True on first run.")
+    if NFORMATS > 1:
+        print(f"🔁 Precomputing {NFORMATS} random-format variants/ECG (overwrite={RERENDER})...")
+        save_all_images_multi(train_df, IMAGE_DIR, n_variants=NFORMATS, overwrite=RERENDER)
+    else:
+        print(f"🔁 Precomputing images (overwrite={RERENDER})...")
+        save_all_images(train_df, IMAGE_DIR, overwrite=RERENDER)
+    save_all_images(validate_df, IMAGE_DIR, overwrite=RERENDER)   # val: single fixed render
+
+# validation -> RAM (single fixed render; stable val signal, no format aug)
 val_images = load_images_parallel(validate_df['fileID'], IMAGE_DIR)
 validate_df = validate_df.copy()
 validate_df['image_array'] = validate_df['fileID'].map(val_images)
 validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
 assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
+
+# training sequence
+if NFORMATS > 1:
+    train_sequence = DataSequenceMultiAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL,
+                                             image_dir=IMAGE_DIR, n_variants=NFORMATS)
+    train_df = train_sequence.df    # may drop samples with no rendered variant
+else:
+    print("Loading images from disk into RAM...")
+    train_images = load_images_parallel(train_df['fileID'], IMAGE_DIR)
+    train_df['image_array'] = train_df['fileID'].map(train_images)
+    train_df = train_df[train_df['image_array'].notna()].reset_index(drop=True)
+    assert len(train_df) > 0, (
+        f"No images loaded from {IMAGE_DIR}. Set MAKE_IMAGE=True on first run.")
+    train_sequence = DataSequenceAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
+validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # --- actual usable data after rendering/loading (images, not just rows) ---
 def _summarize(df, name):
@@ -226,9 +243,6 @@ print("=" * 64 + "\n")
 # Mild class weights — cohort is already 1:10 matched, so imbalance is handled at data level
 _model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
 print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
-
-train_sequence = DataSequenceAugRAM(df=train_df, batch_size=BATCH_SIZE, label=LABEL)
-validation_sequence = DataSequenceRAM(df=validate_df, batch_size=BATCH_SIZE, label=LABEL)
 
 # %% === Train ===
 epoch_csv = os.path.join(MODEL_DIR, f'{LABEL}_{run_id}_epochs.csv')
@@ -292,7 +306,8 @@ registry_row = dict(
     class_weights=str(_model_module.CLASS_WEIGHTS.tolist()),
     match_ratio=getattr(project, 'MATCH_RATIO', None),
     data_key=os.path.basename(project.ecg_metadata_file),
-    augmentation='rotation+-10deg+randomformat' + ('(fresh-per-run)' if RERENDER else '(cached)'),
+    augmentation=(f'rotation+-10deg+randomformat(N={NFORMATS},sample-per-epoch)'
+                  if NFORMATS > 1 else 'rotation+-10deg+singlerender'),
     batch_size=BATCH_SIZE,
     epochs_frozen=EPOCHS_FROZEN,
     epochs_unfrozen=EPOCHS,
