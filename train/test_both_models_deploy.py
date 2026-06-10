@@ -8,8 +8,8 @@ skimage.resize 300x300 -> [0,1])).
 Train still uses make_plot's random-style augmentation (unchanged). Only the TEST
 render switches to the deployment pipeline, per the deployment-faithful eval plan.
 
-Requires the ynhh-apis repo on the box. Set YNHH_APIS_PATH if not at the default:
-    git clone git@github.com:CarDS-Yale/ynhh-apis.git ~/projects/ynhh-apis
+Render code is vendored in train/deploy_render.py (copied verbatim from ynhh-apis
+amyloid-api/ecg/ecg.py), so no clone is needed. Run:
     python train/test_both_models_deploy.py
 """
 import os
@@ -33,10 +33,8 @@ from eval import (load_test_cohort, sensitivity_at_specificity,
 sys.path.append(project.ecg_image_models_path)
 from utils import load_signal_mV
 
-# --- ynhh-apis deployment render code (reused verbatim) ---
-YNHH = os.getenv('YNHH_APIS_PATH', '/home/pmc57/projects/ynhh-apis/amyloid-api')
-sys.path.append(YNHH)
-from ecg.ecg import process_ecg_plot_from_signal, butter_lowpass_filter  # noqa: E402
+# --- deployment render code (vendored verbatim from ynhh-apis ecg.ecg) ---
+from deploy_render import process_ecg_plot_from_signal, butter_lowpass_filter
 
 LABEL = 'amyloid'
 MODEL_DIR = os.path.join(project.project_root, 'models')
