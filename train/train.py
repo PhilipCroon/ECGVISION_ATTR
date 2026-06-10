@@ -3,7 +3,7 @@
 Train ECGVISION-ATTR (amyloid) on the difficulty-enriched matched cohort.
 
 Ported from the existing PheWAS-style training script, specialized to a single
-binary label (amyloid). Cohort source = tabs/train_matched_1_20.csv produced by
+binary label (amyloid). Cohort source = tabs/train_matched_1_10.csv produced by
 build_cohort.py + matching.R.
 
 Label:  group == 'amyloid'  -> 1   (control / lvh / pyp_negative -> 0)
@@ -105,7 +105,7 @@ print(f"GPUs available: {len(gpus)}")
 tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
 
 # %% === Data ===
-cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_20.csv'))
+cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_10.csv'))
 
 # Binary label
 cohort[LABEL] = (cohort['group'] == 'amyloid').astype(np.float32)
@@ -163,7 +163,7 @@ validate_df['image_array'] = validate_df['fileID'].map(val_images)
 validate_df = validate_df[validate_df['image_array'].notna()].reset_index(drop=True)
 assert len(validate_df) > 0, f"No validation images loaded from {IMAGE_DIR}."
 
-# Mild class weights — cohort is already 1:20 matched, so imbalance is handled at data level
+# Mild class weights — cohort is already 1:10 matched, so imbalance is handled at data level
 _model_module.CLASS_WEIGHTS = np.array([[1.3, 0.77]])
 print("Class weights — pos: 1.30  neg: 0.77  ratio: 1.7x")
 

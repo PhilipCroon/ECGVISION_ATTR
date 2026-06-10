@@ -56,7 +56,7 @@ except Exception as e:
 print("\n=== DataSequenceAugRAM batch test ===")
 try:
     import pandas as pd
-    cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_20.csv'))
+    cohort = pd.read_csv(os.path.join(project.tabs_path, 'train_matched_1_10.csv'))
     cohort['amyloid'] = (cohort['group'] == 'amyloid').astype(float)
     cohort['fileID'] = cohort['FileID'].astype(str).str.replace('.dcm$', '', regex=True)
     sample = cohort.head(64).copy()

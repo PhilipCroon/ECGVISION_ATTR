@@ -22,7 +22,7 @@ source pipeline are deliberate and listed below.
 - **pyp_negative:** PyP "not consistent".
 - **control (LVH / AS):** echo-derived `Composite_LVH_binary == 1` or `SevereAS_ObjSubj == 1`, excluding PyP cases.
 - **ECG window:** ECG within `[-365d, ∞)` of PyP date (cases) / `±30d` of echo (controls).
-- **Enrichment:** R `MatchIt` 1:20 nearest-neighbor on Age + Sex — amyloid vs. control **and** amyloid vs. LVH (the second arm makes negatives hard).
+- **Matching:** R `MatchIt` 1:10 nearest-neighbor on Age + Sex — amyloid vs. control (single arm). Controls capped at 5 most-recent ECGs/patient; amyloid uncapped.
 
 ## Pipeline
 
@@ -33,8 +33,8 @@ python src/clean_echo.py
 # 1. build cohort: merge PyP + ECG + echo, date-window, train/test split @ 2025-07-01
 python src/build_cohort.py            # -> tabs/cohort_train.csv, tabs/cohort_test.csv
 
-# 2. 1:20 difficulty-enriched matching (patient level), expand to ECG level
-Rscript src/matching.R                # -> tabs/train_matched_1_20.csv
+# 2. 1:10 age+sex matching (patient level), expand to ECG level
+Rscript src/matching.R                # -> tabs/train_matched_1_10.csv
 
 # 3. train (EfficientNetB3 transfer, contrastive init)
 python train/train.py

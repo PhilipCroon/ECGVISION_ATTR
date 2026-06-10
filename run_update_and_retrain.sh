@@ -2,7 +2,7 @@
 # Full pipeline to retrain on the refreshed pdcfs1 data:
 #   1. regenerate the flagged ECG-metadata key (pulls new pdcfs1 through ~present)
 #   2. rebuild cohort (new ECGs flow into train/test)
-#   3. 1:20 difficulty matching
+#   3. 1:10 age+sex matching
 #   4. retrain (renders all PNGs incl. new pdcfs1 on first pass, then trains)
 #
 # Run AFTER run_test_comparison.sh and after check_pdcfs1.py is green.
@@ -24,7 +24,7 @@ echo "Pipeline start $(date)  CUDA=$CUDA_VISIBLE_DEVICES  log=$LOG" | tee "$LOG"
 
 step python src/build_ecg_metadata.py     # -> data_LD/ecg_metadata_flagged_..._<today>.csv (auto-picked)
 step python src/build_cohort.py            # watch amyloid TRAIN/TEST MRN counts grow vs before
-step Rscript src/matching.R                # -> tabs/train_matched_1_20.csv
+step Rscript src/matching.R                # -> tabs/train_matched_1_10.csv
 step python train/train.py                 # watch the [train] n_new tripwire
 
 echo -e "\nDone $(date). New checkpoint: models/attr_amyloid_<today>_unfrozen_<NN>" | tee -a "$LOG"

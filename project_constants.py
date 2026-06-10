@@ -57,7 +57,7 @@ os.makedirs(final_files_path, exist_ok=True)
 CUTOFF_DATE = '2025-07-01'
 
 # === Matching ===
-MATCH_RATIO = 20            # 1:20 difficulty enrichment (amyloid vs control AND vs lvh)
+MATCH_RATIO = 10            # 1:10 age+sex match (amyloid vs control, single arm)
 MAX_ECG_PER_PATIENT = 5     # ECGs kept per matched patient
 
 

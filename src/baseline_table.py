@@ -91,7 +91,7 @@ tables = {}
 for fname, label in [
     ('cohort_train.csv', 'Train (pre-matching)'),
     ('cohort_test.csv', 'Test (temporal holdout)'),
-    ('train_matched_1_20.csv', 'Train matched 1:20'),
+    ('train_matched_1_10.csv', 'Train matched 1:10'),
 ]:
     path = os.path.join(project.tabs_path, fname)
     if not os.path.exists(path):
