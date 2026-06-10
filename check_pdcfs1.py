@@ -82,29 +82,55 @@ def main():
 
     # ---- Blocker 2 ----
     print("\n" + "=" * 60 + "\nBLOCKER 2: _load_norm(raw nfs) vs store array\n" + "=" * 60)
+    # /200 is confirmed (scaled_by=200); the open question is the 5500->5000 step.
+    # Try candidate transforms on raw (12,5500)/200 and report which matches the store.
+    import scipy.signal as _ss
+
+    def candidates(raw):
+        # raw: np.load of nfs file. Orient to (N,12), scale /200, then reduce N->5000.
+        a = np.asarray(raw)
+        if a.shape[0] == 12:
+            a = a.T                      # (5500,12)
+        a = a / 200.0
+        n = a.shape[0]
+        out = {}
+        out['first[0:5000]']      = a[0:5000, :]
+        out['last[-5000:]']       = a[n-5000:, :]
+        out['center']             = a[(n-5000)//2:(n-5000)//2+5000, :]
+        out['resample5000']       = _ss.resample(a, 5000, axis=0)
+        out['decimate(stride)']   = a[::max(1, n//5000), :][:5000, :]
+        return out
+
     checked = 0
-    worst = 0.0
+    agg = {}
     for fr in pdc['fid_rel']:
         sp = os.path.join(STORE, fr + '.npy')
         rp = os.path.join(NFS, 'numpy', fr + '.npy')
         if os.path.exists(sp) and os.path.exists(rp):
-            s, r = load_store(sp), load_raw_pdcfs1(rp)
-            if s.shape != r.shape:
-                print(f"  SHAPE MISMATCH {fr}: store={s.shape} raw={r.shape}")
-            else:
-                d = float(np.abs(s - r).max())
-                worst = max(worst, d)
-                print(f"  {fr}  max|store-raw|={d:.6f}")
+            s = load_store(sp)
+            raw = np.load(rp, allow_pickle=True)
+            print(f"\n  {fr}  store={s.shape}  raw={np.asarray(raw).shape}")
+            for name, cand in candidates(raw).items():
+                if cand.shape != s.shape:
+                    print(f"    {name:18s} shape={cand.shape}  (mismatch)")
+                    continue
+                d = float(np.abs(s - cand).max())
+                agg.setdefault(name, []).append(d)
+                print(f"    {name:18s} max|store-cand|={d:.6f}")
             checked += 1
             if checked >= 5:
                 break
     if checked == 0:
         print("  No pdcfs1 fileID found in BOTH store and nfs numpy/ — cannot compare directly.")
-        print("  (Old pdcfs1 may have been moved out of nfs after consolidation.)")
     else:
-        print(f"\n  worst max|diff| over {checked} = {worst:.6f}")
-        print("  >>> PASS (raw load matches store)" if worst < 1e-3 else
-              "  >>> FAIL: raw load != store. _load_norm misses the real transform.")
+        print("\n  --- transform ranking (mean worst-diff over samples) ---")
+        ranked = sorted(((np.mean(v), k) for k, v in agg.items()))
+        for m, k in ranked:
+            print(f"    {k:18s} mean max|diff|={m:.6f}")
+        best_m, best_k = ranked[0]
+        print(f"\n  >>> BEST: {best_k}  (mean {best_m:.6f})")
+        print("  >>> PASS — wire this into make_plot" if best_m < 1e-3 else
+              "  >>> still FAIL — none match; raw->store may also resample/filter differently.")
 
     print("\nqc_metadata transform fields (why raw->store may be non-trivial):")
     cols = [c for c in ['fid_rel', 'original_shape', 'scaled_by', 'has_padding',
