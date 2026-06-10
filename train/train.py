@@ -23,7 +23,8 @@ import tensorflow as tf
 from PIL import ImageFile
 from sklearn.utils import shuffle
 from sklearn.model_selection import GroupShuffleSplit
-from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger, EarlyStopping
+from tensorflow.keras.callbacks import (ModelCheckpoint, CSVLogger, EarlyStopping,
+                                        ReduceLROnPlateau)
 from tqdm.keras import TqdmCallback
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -249,7 +250,10 @@ with strategy.scope():
 saved_model_file = os.path.join(MODEL_DIR, f'attr_{LABEL}_{run_id}_unfrozen' + '_{epoch:02d}')
 checkpoint = ModelCheckpoint(saved_model_file, monitor='val_auroc', mode='max',
                              save_best_only=True, verbose=1)
-early_stop = EarlyStopping(monitor='val_auroc', patience=5, mode='max', verbose=1)
+early_stop = EarlyStopping(monitor='val_auroc', patience=8, mode='max', verbose=1)
+# Start hot (LR_UNFROZEN=1e-4), drop LR when val_auroc stalls -> fine-settle.
+reduce_lr = ReduceLROnPlateau(monitor='val_auroc', mode='max', factor=0.5,
+                              patience=2, min_lr=1e-6, verbose=1)
 
 registry_row = dict(
     run_id=run_id,
@@ -268,7 +272,7 @@ registry_row = dict(
     val_fraction=VAL_FRACTION,
     train_sequence='DataSequenceAugRAM',
     lr_frozen=1e-3,
-    lr_unfrozen='ExponentialDecay(2e-5,steps=1000,rate=0.96)',
+    lr_unfrozen='1e-4 + ReduceLROnPlateau(factor=0.5,patience=2,min_lr=1e-6)',
     mixed_precision='mixed_bfloat16',
     n_train=len(train_df),
     n_val=len(validate_df),
@@ -287,7 +291,7 @@ registry_row = dict(
 registry_cb = RegistryCallback(registry_row, ckpt_template=saved_model_file)
 
 fit_kwargs['callbacks'] = [TqdmCallback(verbose=1), checkpoint, csv_logger, gc_callback(),
-                           early_stop, registry_cb]
+                           reduce_lr, early_stop, registry_cb]
 
 print(f"Phase 2: unfrozen, {EPOCHS} epochs @ LR=ExponentialDecay(2e-5), augmentation=rotation±10°")
 model_cnn.fit(train_sequence, epochs=EPOCHS, **fit_kwargs)
