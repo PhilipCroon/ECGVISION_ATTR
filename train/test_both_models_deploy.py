@@ -14,6 +14,7 @@ amyloid-api/ecg/ecg.py), so no clone is needed. Run:
 """
 import os
 import sys
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import pandas as pd
@@ -90,24 +91,33 @@ def main():
     assert os.path.exists(NEW_MODEL), f"NEW missing: {NEW_MODEL}"
     models = [(t, p) for t, p in models if os.path.exists(p)]
 
-    gpus = tf.config.list_physical_devices('GPU')
-    for g in gpus:
-        tf.config.experimental.set_memory_growth(g, True)
-    tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
-
     cohort = load_test_cohort()
     print(f"\nTest ECGs: {len(cohort)} ({cohort['MRN'].nunique()} MRNs)  pos={int(cohort[LABEL].sum())}")
 
-    print("Rendering with deployment pipeline (skips existing)...")
-    paths = [render_deploy(f) for f in tqdm(cohort['fileID'], desc="render")]
+    # --- render + image load in parallel, BEFORE any TF/GPU init ---
+    # CUDA is not fork-safe: fork the pools first, then touch the GPU.
+    nworkers = max(1, cpu_count() - 2)
+    print(f"Rendering with deployment pipeline ({nworkers} workers, skips existing)...")
+    with Pool(nworkers) as pool:
+        paths = list(tqdm(pool.imap(render_deploy, cohort['fileID'].tolist(), chunksize=8),
+                          total=len(cohort), desc="render"))
     cohort['img_path'] = paths
     n0 = len(cohort)
     cohort = cohort[cohort['img_path'].notna()].reset_index(drop=True)
     print(f"  rendered {len(cohort)}/{n0} ({n0 - len(cohort)} failed)")
     assert len(cohort) > 0, "0 deployment renders"
 
-    print("Loading images (deployment make_image: L->RGB, skimage resize, [0,1])...")
-    X = np.stack([make_image(p) for p in tqdm(cohort['img_path'], desc="load")]).astype(np.float32)
+    print(f"Loading images ({nworkers} workers; deployment make_image: L->RGB, skimage resize, [0,1])...")
+    with Pool(nworkers) as pool:
+        imgs = list(tqdm(pool.imap(make_image, cohort['img_path'].tolist(), chunksize=8),
+                         total=len(cohort), desc="load"))
+    X = np.stack(imgs).astype(np.float32)
+
+    # --- now safe to init the GPU ---
+    gpus = tf.config.list_physical_devices('GPU')
+    for g in gpus:
+        tf.config.experimental.set_memory_growth(g, True)
+    tf.keras.mixed_precision.set_global_policy('mixed_bfloat16')
 
     rows = []
     for tag, path in models:
