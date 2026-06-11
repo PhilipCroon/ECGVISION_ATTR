@@ -5,6 +5,8 @@ models/
 *.csv
 *.parquet
 *.npy
+*.log
+logs/
 output.txt
 
 # Python
