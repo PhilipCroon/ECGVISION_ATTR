@@ -7,17 +7,21 @@ Why soft-average (not weight-average): the members trained on different bagging
 splits + seeds -> different loss basins, so only OUTPUTS may be averaged, never
 weights. See train.py:71-83 and the discussion in eval.py.
 
-Usage:
-    python ensemble_eval.py                         # auto: best_ckpt per seed from run_registry.csv
-    python ensemble_eval.py <ckpt1> <ckpt2> <ckpt3> # explicit checkpoint dirs
-    python ensemble_eval.py --seeds 1 2 3           # pick these seeds from the registry
-    python ensemble_eval.py --with-prod             # also score the deployed production model
-    python ensemble_eval.py --ref yday=models/attr_amyloid_2026_06_10_unfrozen_07
-                                                    # score extra baseline(s), label=path
+Model paths are HARDCODED at the top of the file (MEMBER_RUN_IDS, YDAY_MODEL,
+PROD_MODEL) — no args needed. The best checkpoint per member run is globbed from
+models/ (highest-epoch saved dir = best, since save_best_only=True), so you don't
+need exact epoch numbers, and the corrupt run_registry.csv is never read.
 
-Reference models (--ref / --with-prod) are scored as SINGLES alongside the members
-but are NOT part of the soft-average. They take the same 300x300x3 [0,1] input, so
-the comparison is apples-to-apples on the same render. The paired bootstrap reports
+Usage:
+    python ensemble_eval.py                         # 3 members + ensemble + yday + prod (defaults)
+    python ensemble_eval.py --seeds 1 2             # drop s3: 2-member ensemble
+    python ensemble_eval.py <ckpt1> <ckpt2> ...     # explicit member dirs (override hardcode)
+    python ensemble_eval.py --with-prod             # only prod as ref (override default refs)
+    python ensemble_eval.py --ref foo=models/<dir>  # custom ref(s), label=path
+
+Reference models (yday, prod) are scored as SINGLES alongside the members but are
+NOT part of the soft-average. They take the same 300x300x3 [0,1] input, so the
+comparison is apples-to-apples on the same render. The paired bootstrap reports
 Delta(ensemble - X) for the best member AND every reference -> the headline is
 Delta(ensemble - prod): does the new ensemble beat what's deployed?
 
@@ -52,10 +56,25 @@ from eval import (load_test_cohort, report_metrics, IMAGE_DIR, MODEL_DIR, LABEL)
 sys.path.append(project.ecg_image_models_path)
 from utils import load_images_parallel, save_all_images
 
-REGISTRY_FILE = os.path.join(MODEL_DIR, 'run_registry.csv')
+# === HARDCODED MODELS (edit these, no args needed) ===========================
+# Ensemble members = the 3 seed runs from 2026-06-11. Each run saved multiple
+# 'unfrozen_NN' dirs (save_best_only=True writes only on improvement), so the
+# BEST checkpoint = the highest-epoch saved dir for that run_id. We glob for it
+# below, so you do NOT need to know the exact best epoch.
+MEMBER_RUN_IDS = [
+    ('s1', '20260611_032321_s1'),
+    ('s2', '20260611_054609_s2'),
+    ('s3', '20260611_073236_s3'),
+]
+# Reference models (scored as singles, NOT averaged): yesterday's best + production.
+YDAY_MODEL = os.path.join(MODEL_DIR, 'attr_amyloid_20260610_101422_unfrozen_15')
 # Deployed production model (image-only amyloid, epoch 15). Same path the existing
 # compare_on_test/test_both_models scripts use. The bar the ensemble must beat.
 PROD_MODEL = '/home/pmc57/cmp-jdat-data/variant_amyloid/models/trained_model_Amyloidosis_stage2_age_sex_1_10_15'
+DEFAULT_REFS = [('yday', YDAY_MODEL), ('prod', PROD_MODEL)]
+# =============================================================================
+
+import glob
 N_BOOT = 2000
 BOOT_SEED = 20250910
 ALPHA = 0.05
@@ -66,8 +85,22 @@ def _ci(vals):
     return float(lo), float(hi)
 
 
+def _best_dir_for_run(run_id):
+    """Highest-epoch 'unfrozen' checkpoint dir for a run_id = its best (save_best_only)."""
+    pat = os.path.join(MODEL_DIR, f'attr_{LABEL}_{run_id}_unfrozen_*')
+    dirs = [d for d in glob.glob(pat) if os.path.isdir(d)]
+    if not dirs:
+        return None
+    def _epoch(d):
+        try:
+            return int(d.rstrip('/').split('_')[-1])
+        except ValueError:
+            return -1
+    return max(dirs, key=_epoch)
+
+
 def resolve_checkpoints(explicit_paths, seeds):
-    """Return [(label, abs_ckpt_path), ...]. Explicit paths win; else read registry."""
+    """Return [(label, abs_ckpt_path), ...]. Explicit paths win; else use hardcoded run_ids."""
     if explicit_paths:
         out = []
         for p in explicit_paths:
@@ -76,29 +109,20 @@ def resolve_checkpoints(explicit_paths, seeds):
             out.append((os.path.basename(ap.rstrip('/')), ap))
         return out
 
-    assert os.path.exists(REGISTRY_FILE), (
-        f"No {REGISTRY_FILE}. Pass checkpoint dirs explicitly.")
-    reg = pd.read_csv(REGISTRY_FILE)
-    reg = reg[reg['best_ckpt'].notna() & (reg['best_ckpt'].astype(str) != '')]
+    members = MEMBER_RUN_IDS
     if seeds:
-        reg = reg[reg['seed'].isin([float(s) for s in seeds] + [int(s) for s in seeds])]
-    assert len(reg) > 0, "No registry rows with a best_ckpt (did training finish?)."
-
-    # per seed, keep the latest run (run_id is a sortable timestamp string)
-    reg = reg.sort_values('run_id')
-    picked = reg.groupby('seed', dropna=False).tail(1)
+        want = {f's{int(s)}' for s in seeds}
+        members = [(lbl, rid) for lbl, rid in MEMBER_RUN_IDS if lbl in want]
     out = []
-    for _, row in picked.iterrows():
-        ckpt = os.path.join(MODEL_DIR, str(row['best_ckpt']))
-        if not os.path.isdir(ckpt):
-            print(f"WARNING: best_ckpt missing on disk, skipping: {ckpt}")
+    for label, run_id in members:
+        ckpt = _best_dir_for_run(run_id)
+        if ckpt is None:
+            print(f"WARNING: no checkpoint dir found for run {run_id}, skipping.")
             continue
-        seed = row['seed']
-        label = f"s{int(seed)}" if pd.notna(seed) else "noseed"
         out.append((label, ckpt))
     assert len(out) >= 2, (
         f"Need >=2 checkpoints to ensemble; resolved {len(out)}. "
-        f"Check run_registry.csv best_ckpt paths.")
+        f"Check the MEMBER_RUN_IDS run_ids exist as dirs in {MODEL_DIR}.")
     return out
 
 
@@ -134,14 +158,18 @@ def main():
     for label, path in members:
         print(f"  [{label}] {path}")
 
-    # reference models: scored as singles, NOT averaged
+    # reference models: scored as singles, NOT averaged.
+    # No CLI refs given -> default to the hardcoded yday + prod baselines.
     refs = []
-    if args.with_prod:
-        refs.append(('prod', PROD_MODEL))
-    for spec in (args.ref or []):
-        assert '=' in spec, f"--ref must be label=path, got: {spec}"
-        lbl, p = spec.split('=', 1)
-        refs.append((lbl, p if os.path.isabs(p) else os.path.join(MODEL_DIR, p)))
+    if args.ref is None and not args.with_prod:
+        refs = list(DEFAULT_REFS)
+    else:
+        if args.with_prod:
+            refs.append(('prod', PROD_MODEL))
+        for spec in (args.ref or []):
+            assert '=' in spec, f"--ref must be label=path, got: {spec}"
+            lbl, p = spec.split('=', 1)
+            refs.append((lbl, p if os.path.isabs(p) else os.path.join(MODEL_DIR, p)))
     kept_refs = []
     for lbl, p in refs:
         if os.path.isdir(p):
