@@ -22,6 +22,7 @@ Saves: tabs/external_ensemble_preds.csv     (per-image, all pred_ cols incl pred
 """
 import os
 import sys
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -33,9 +34,16 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import project_constants as project
 from model import loss_fn
 from eval import sensitivity_at_specificity, specificity_at_sensitivity
+from eval_log import log_eval
 import test_external_cohorts as tec
 from ensemble_eval import (MEMBER_RUN_IDS, _best_dir_for_run, YDAY_MODEL,
                            PROD_MODEL, _ci, N_BOOT, BOOT_SEED)
+
+# Free-text label for this eval run, written to eval_log.csv 'notes' so a future
+# augmentation run is filterable next to this baseline. e.g.:
+#   RUN_TAG="noaug_baseline" python train/test_external_ensemble.py
+#   RUN_TAG="nformats5_scanaug" python train/test_external_ensemble.py
+RUN_NOTE = os.getenv('RUN_TAG', '')
 
 
 def main():
@@ -85,6 +93,17 @@ def main():
     all_cols = member_cols + ['pred_ENS'] + ref_cols
     rng = np.random.default_rng(BOOT_SEED)
 
+    # map each score column -> a model identifier stored in eval_log.csv. The
+    # ensemble id lists its member run-ids so the soft-avg is reproducible.
+    col_model = {f'pred_{lbl}': os.path.basename(path) for lbl, path in members + refs}
+    col_model['pred_ENS'] = 'ENSEMBLE[' + '+'.join(
+        os.path.basename(p) for _, p in members) + ']'
+    # render tag captures the preprocessing arm (nocrop/yolocrop, +adjust) so the
+    # SCAN-MP ADJUST/CROP reruns are distinguishable from the default render.
+    render_tag = ('deploy_external'
+                  + ('_yolocrop' if tec.CROP_ENABLED else '_nocrop')
+                  + ('_adjust' if tec.ADJUST_ENABLED else ''))
+
     rows = []
     print("\n" + "=" * 78)
     print("EXTERNAL COHORTS — ENSEMBLE vs members/yday/prod (per-image)")
@@ -105,9 +124,12 @@ def main():
             tag = c.replace('pred_', '')
             print(f"  {tag:8s} AUROC={auroc:.4f} AUPRC={auprc:.4f} "
                   f"Sens@90spec={sens:.4f} Spec@90sens={spec:.4f}")
-            rows.append({'cohort': name, 'model': tag, 'n': n, 'pos': int(y.sum()),
-                         'auroc': round(auroc, 4), 'auprc': round(auprc, 4),
-                         'sens_90spec': sens, 'spec_90sens': spec})
+            m = {'n': n, 'pos': int(y.sum()), 'auroc': round(auroc, 4),
+                 'auprc': round(auprc, 4), 'sens_90spec': sens, 'spec_90sens': spec}
+            rows.append({'cohort': name, 'model': tag, **m})
+            # persist to the shared cross-run eval log (models/eval_log.csv)
+            log_eval(col_model[c], cohort=name, metrics=m, render=render_tag,
+                     level='image', notes=RUN_NOTE)
 
         # paired bootstrap: shared resample indices across models -> paired deltas
         idx_sets = []
@@ -141,14 +163,19 @@ def main():
                        f"{cname2} wins (CI<0)" if dhi < 0 else "overlaps 0 (n.s.)")
             print(f"    Δ(ENS - {cname2}) = {diff.mean():+.4f} [{dlo:+.4f},{dhi:+.4f}]  -> {verdict}")
 
+    # snapshot CSVs are stamped (note + timestamp) so each run is kept, not clobbered.
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    tag = (RUN_NOTE + '_' if RUN_NOTE else '') + stamp
     out = pd.DataFrame(rows)
-    metrics_path = os.path.join(project.tabs_path, 'external_ensemble_metrics.csv')
+    metrics_path = os.path.join(project.tabs_path, f'external_ensemble_metrics_{tag}.csv')
     out.to_csv(metrics_path, index=False)
     keep = ['cohort', 'label', 'path'] + all_cols
-    preds_path = os.path.join(project.tabs_path, 'external_ensemble_preds.csv')
+    preds_path = os.path.join(project.tabs_path, f'external_ensemble_preds_{tag}.csv')
     df[[c for c in keep if c in df.columns]].to_csv(preds_path, index=False)
     print(f"\nSaved metrics: {metrics_path}")
     print(f"Saved preds:   {preds_path}")
+    print(f"Appended {len(rows)} rows to the cross-run log: models/eval_log.csv"
+          + (f"  (notes='{RUN_NOTE}')" if RUN_NOTE else ""))
 
 
 if __name__ == '__main__':
