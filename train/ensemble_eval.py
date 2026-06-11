@@ -56,16 +56,31 @@ from eval import (load_test_cohort, report_metrics, IMAGE_DIR, MODEL_DIR, LABEL)
 sys.path.append(project.ecg_image_models_path)
 from utils import load_images_parallel, save_all_images
 
-# === HARDCODED MODELS (edit these, no args needed) ===========================
-# Ensemble members = the 3 seed runs from 2026-06-11. Each run saved multiple
-# 'unfrozen_NN' dirs (save_best_only=True writes only on improvement), so the
-# BEST checkpoint = the highest-epoch saved dir for that run_id. We glob for it
-# below, so you do NOT need to know the exact best epoch.
-MEMBER_RUN_IDS = [
+# === HARDCODED MODELS (edit these, or override via MEMBER_RUNS env) ==========
+# Ensemble members. Each run saved multiple 'unfrozen_NN' dirs (save_best_only=True
+# writes only on improvement), so the BEST checkpoint = the highest-epoch saved dir
+# for that run_id. We glob for it below, so you do NOT need the exact best epoch.
+#
+# Override per-run without editing this file:
+#   MEMBER_RUNS="20260612_..._s1 20260612_..._s2 20260612_..._s3" python train/ensemble_eval.py
+# Labels are derived from the _sN suffix (falls back to the run_id).
+import re as _re
+
+_DEFAULT_MEMBER_RUN_IDS = [
     ('s1', '20260611_032321_s1'),
     ('s2', '20260611_054609_s2'),
     ('s3', '20260611_073236_s3'),
 ]
+
+
+def _label_for_run(rid):
+    m = _re.search(r'_s(\d+)$', rid)
+    return f"s{m.group(1)}" if m else rid
+
+
+_env_runs = os.getenv('MEMBER_RUNS', '').split()
+MEMBER_RUN_IDS = ([(_label_for_run(r), r) for r in _env_runs]
+                  if _env_runs else _DEFAULT_MEMBER_RUN_IDS)
 # Reference models (scored as singles, NOT averaged): yesterday's best + production.
 YDAY_MODEL = os.path.join(MODEL_DIR, 'attr_amyloid_20260610_101422_unfrozen_15')
 # Deployed production model (image-only amyloid, epoch 15). Same path the existing
