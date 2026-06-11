@@ -291,7 +291,11 @@ def predict(model, X, batch_size=256):
     return np.concatenate(preds).squeeze()
 
 
-def main():
+def load_external_images():
+    """Gather every external cohort's files+labels, run the deploy preprocessing
+    (CROP/ADJUST envs honored), and return (df, X) where df has cohort/label/path/img
+    and X is the stacked float32 image tensor. Shared by main() and the ensemble eval
+    so both score the IDENTICAL render."""
     # --- gather files + labels per cohort ---
     frames = []
     for name, folders in COHORTS.items():
@@ -354,6 +358,12 @@ def main():
             Image.fromarray((sub['img'].iloc[i] * 255).astype(np.uint8)).save(
                 os.path.join(check_dir, f"sample_{i}_label{sub['label'].iloc[i]}.png"))
         print(f"Saved {min(5, len(sub))} {cname} render samples -> {check_dir} (EYEBALL THESE)")
+
+    return df, X
+
+
+def main():
+    df, X = load_external_images()
 
     gpus = tf.config.list_physical_devices('GPU')
     for g in gpus:
